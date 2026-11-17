@@ -66,6 +66,7 @@ const ICONS = {
   edit: '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
   refresh: '<path d="M20 11a8 8 0 0 0-14.9-3.5M4 4v4h4M4 13a8 8 0 0 0 14.9 3.5M20 20v-4h-4"/>',
+  eyeOff: '<path d="M3 3l18 18M10.6 5.1A10.4 10.4 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3.2 3.9M6.6 6.6C3.8 8.4 2 12 2 12s4 7 10 7c1.8 0 3.4-.5 4.8-1.3M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   bell: '<path d="M6 16v-5a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>',
   forward: '<path d="M5 12h14M13 6l6 6-6 6"/>',
@@ -128,6 +129,7 @@ function defaultState() {
     doneShortcut: 'Росток готово',
     writeBack: true,
     inboxOpen: true,
+    showDone: false,
   };
 }
 let state = load();
@@ -436,7 +438,15 @@ function viewPlan() {
   html += `<div class="seg" style="margin-top:20px">
     <button class="${state.planView === 'matrix' ? 'on' : ''}" data-pv="matrix">Матрица</button>
     <button class="${state.planView === 'sched' ? 'on' : ''}" data-pv="sched">Расписание</button></div>`;
-  html += state.planView === 'sched' ? viewSched(tt) : viewMatrix(tt);
+  const doneAll = state.tasks.filter(t => t.done).length;
+  const doneVisible = tt.filter(t => t.done).length;
+  if (doneAll) {
+    html += `<div class="row between small" style="margin-top:10px">
+      <button class="linkbtn" data-show-done>${ic(state.showDone ? 'eye' : 'eyeOff', 16)} ${state.showDone ? 'Скрыть готовые' : `Показать готовые${doneVisible ? ` (${doneVisible})` : ''}`}</button>
+      <button class="linkbtn" data-clear-done>${ic('x', 16)} Очистить готовые (${doneAll})</button></div>`;
+  }
+  const shownTasks = state.showDone ? tt : tt.filter(t => !t.done);
+  html += state.planView === 'sched' ? viewSched(shownTasks) : viewMatrix(shownTasks);
 
   const pend = calPending();
   if (pend.length) html += `<button class="btn primary block" style="margin-top:14px" data-cal-day>${ic('bell', 18)} Поставить напоминания в Календарь (${pend.length})</button>`;
@@ -924,6 +934,13 @@ document.addEventListener('click', e => {
     save(); render();
     openIcs(pend.map(x => icsEvent({ title: x.text, date: x.date && x.date > today() ? x.date : today(), time: x.time, dur: x.dur })), 'rostok-day.ics');
     return;
+  }
+  if ('showDone' in ds) { state.showDone = !state.showDone; commit(); return; }
+  if ('clearDone' in ds) {
+    const n = state.tasks.filter(t => t.done).length;
+    if (!confirm(`Убрать ${n} ${plural(n, 'выполненное дело', 'выполненных дела', 'выполненных дел')} из списка? Время по занятиям и победы останутся.`)) return;
+    state.tasks = state.tasks.filter(t => !t.done);
+    commit('Очищено'); return;
   }
   if ('foldInbox' in ds) { state.inboxOpen = !state.inboxOpen; commit(); return; }
   if (ds.openQuad) { const n = +ds.openQuad; openQuads.has(n) ? openQuads.delete(n) : openQuads.add(n); render(); return; }
