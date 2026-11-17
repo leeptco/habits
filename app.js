@@ -73,6 +73,7 @@ const ICONS = {
   flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
   chevronDown: '<path d="M6 9l6 6 6-6"/>',
   chevronUp: '<path d="M6 15l6-6 6 6"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
   timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/>',
 };
 const ic = (name, size = 20) => `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.star}</svg>`;
@@ -115,7 +116,7 @@ const DEFAULT_ACTS = [
 const KEY = 'rostok-v2';
 function defaultState() {
   return {
-    version: 4, name: '', onboarded: false, tab: 'plan', planView: 'matrix', schedMode: 'hours',
+    version: 5, name: '', onboarded: false, tab: 'plan', planView: 'matrix', schedMode: 'hours',
     acts: DEFAULT_ACTS.map(a => ({ ...a })),
     sessions: [],   // {id, aid, date, min, mood, note, at}
     tasks: [],      // {id, text, q, date, time, part, dur, aid, done, doneDate, src, key, calSent}
@@ -130,6 +131,9 @@ function defaultState() {
     writeBack: true,
     inboxOpen: true,
     showDone: false,
+    doneLog: {},     // {дата: сколько дел отмечено}
+    histFilter: '',
+    timerAlerts: true,
   };
 }
 let state = load();
@@ -145,7 +149,12 @@ function load() {
   for (const a of s.acts) { if (a.cat === 'job') a.daily = true; delete a.cat; }
   for (const t of s.tasks) { if (t.part === 'morning') t.part = 'am'; else if (t.part === 'day' || t.part === 'evening') t.part = 'pm'; }
   if ((s.version || 0) < 4) s.writeBack = true; // закрывать напоминания в приложении Напоминания по умолчанию
-  s.version = 4;
+  if ((s.version || 0) < 5) {
+    s.doneLog = {};
+    for (const t of s.tasks) if (t.done && t.doneDate) s.doneLog[t.doneDate] = (s.doneLog[t.doneDate] || 0) + 1;
+  }
+  if (s.tab === 'wins') s.tab = 'hist';
+  s.version = 5;
   return s;
 }
 function save() {
@@ -174,55 +183,46 @@ function actStats(aid) {
 }
 const nextMilestone = total => MILESTONES.find(m => m > total) || Math.ceil((total + 1) / 6000) * 6000;
 
-// ---------- подсказки дня ----------
+// ---------- подсказки дня (только несделанное — список уменьшается) ----------
 function nudges() {
   const out = [];
   const hour = new Date().getHours();
+  const dayNo = Math.floor(fromKey(today()) / 86400000);
 
   for (const a of liveActs().filter(a => a.daily)) {
     const s = actStats(a.id);
+    if (s.todayMin >= a.goal) continue; // цель на сегодня выполнена — убираем
     const planned = state.tasks.some(t => t.aid === a.id && t.date <= today() && !t.done);
-    if (s.todayMin >= a.goal) {
-      out.push({ icon: 'check', html: `<b>${esc(a.name)} сегодня: ${fmtMin(s.todayMin)}.</b> Всего ты вложила ${fmtMin(s.total)}. Дальше — больше.` });
-    } else if (s.todayMin > 0) {
+    if (s.todayMin > 0) {
       out.push({ icon: a.icon, html: `<b>${esc(a.name)}: уже ${fmtMin(s.todayMin)} сегодня.</b> До цели ${fmtMin(a.goal - s.todayMin)}.`, aid: a.id });
     } else {
       const tail = s.since == null ? 'Начни с малого: открой три вакансии и сохрани одну.'
         : s.since === 1 ? 'Вчера ты это делала — продолжай, пока есть инерция.'
         : `Последний раз — ${days(s.since)} назад. Даже 20 минут сдвинут дело.`;
-      out.push({ icon: a.icon, html: `<b>Найди сегодня ${fmtMin(a.goal)} на ${esc(a.name.toLowerCase())}.</b> ${tail}`, aid: a.id, plan: !planned });
+      out.push({ icon: a.icon, html: `<b>Найди сегодня ${fmtMin(a.goal)} на «${esc(a.name)}».</b> ${tail}`, aid: a.id, plan: !planned });
     }
   }
 
-  const restore = liveActs().filter(a => !a.daily).map(a => ({ a, s: actStats(a.id) }));
-  const neglected = restore.filter(x => x.s.since !== null && x.s.since >= 3).sort((x, y) => y.s.since - x.s.since)[0];
+  const free = liveActs().filter(a => !a.daily).map(a => ({ a, s: actStats(a.id) })).filter(x => !x.s.todayMin);
+  const neglected = free.filter(x => x.s.since !== null && x.s.since >= 3).sort((x, y) => y.s.since - x.s.since)[0];
+  let suggested = null;
   if (neglected) {
     const { a, s } = neglected;
+    suggested = a.id;
     const moodTxt = s.mood ? ` Обычно после этого тебе ${moodText(s.mood)}.` : '';
     out.push({ icon: a.icon, html: `<b>${esc(a.name)}: ${days(s.since)} перерыва.</b>${moodTxt} От этого станет легче — может, ${fmtMin(a.goal)} сегодня?`, aid: a.id, plan: true });
   } else {
-    const never = restore.filter(x => x.s.count === 0);
+    const never = free.filter(x => x.s.count === 0);
     if (never.length) {
-      const { a } = pick(never);
+      const { a } = never[dayNo % never.length];
+      suggested = a.id;
       out.push({ icon: a.icon, html: `<b>${esc(a.name)}</b> ещё ни разу не отмечено. Попробуй ${fmtMin(Math.min(15, a.goal))} — просто посмотреть, как ощущается.`, aid: a.id, plan: true });
     }
   }
 
-  const walk = liveActs().find(a => a.id === 'walk');
-  if (walk && hour >= 9 && hour < 21 && !actStats(walk.id).todayMin) {
-    out.push({ icon: 'walk', html: '<b>Прогуляйся 15 минут.</b> Можно до магазина и обратно. Телефон — в карман.', aid: walk.id });
-  }
-
-  const momentum = liveActs().map(a => ({ a, s: actStats(a.id) })).filter(x => x.s.week > 0 && !x.a.daily).sort((x, y) => y.s.week - x.s.week)[0];
-  if (momentum) {
-    const { a, s } = momentum, next = nextMilestone(s.total);
-    out.push({ icon: 'trend', html: `<b>${esc(a.name)}: ${fmtMin(s.total)} всего, ${fmtMin(s.week)} за неделю.</b> До отметки «${fmtMin(next)}» осталось ${fmtMin(next - s.total)}.` });
-  }
-
-  const old = allWins().filter(w => daysBetween(w.date, today()) >= 2);
-  if (old.length) {
-    const w = pick(old);
-    out.push({ icon: 'award', cls: 'memory', html: `<b>Помнишь?</b> ${fmtDate(w.date)}: «${esc(w.text)}». Ты это уже умеешь.` });
+  const walk = free.find(x => x.a.id === 'walk');
+  if (walk && suggested !== 'walk' && hour >= 9 && hour < 21) {
+    out.push({ icon: 'walk', html: '<b>Прогуляйся 15 минут.</b> Можно до магазина и обратно. Телефон — в карман.', aid: 'walk' });
   }
   return out;
 }
@@ -310,7 +310,7 @@ function runShortcut(name, text) {
 // ---------- календарь (.ics) ----------
 const icsEsc = s => String(s).replace(/\\/g, '\\\\').replace(/[,;]/g, m => '\\' + m).replace(/\n/g, '\\n');
 const icsDT = (k, t) => k.replace(/-/g, '') + 'T' + t.replace(':', '') + '00';
-function icsEvent({ title, date, time, dur, rrule, note }) {
+function icsEvent({ title, date, time, dur, rrule, note, alarms, alarmText }) {
   const start = new Date(`${date}T${time}:00`);
   const end = new Date(start.getTime() + (dur || 30) * 60000);
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
@@ -319,7 +319,7 @@ function icsEvent({ title, date, time, dur, rrule, note }) {
     `DTSTART:${icsDT(date, time)}`, `DTEND:${icsDT(dkey(end), hm(end))}`,
     rrule ? `RRULE:${rrule}` : null,
     `SUMMARY:${icsEsc(title)}`, note ? `DESCRIPTION:${icsEsc(note)}` : null,
-    'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(title)}`, 'TRIGGER:-PT0M', 'END:VALARM',
+    ...(alarms || [0]).flatMap(m => ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(alarmText || title)}`, `TRIGGER:${m ? `PT${m}M` : '-PT0M'}`, 'END:VALARM']),
     'END:VEVENT',
   ].filter(Boolean).join('\r\n');
 }
@@ -365,7 +365,7 @@ $$('.tabs button').forEach(b => {
 });
 function render() {
   $$('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === state.tab));
-  const views = { plan: viewPlan, acts: viewActs, wins: viewWins, more: viewMore };
+  const views = { plan: viewPlan, acts: viewActs, hist: viewHist, more: viewMore };
   $('#screen').innerHTML = (views[state.tab] || viewPlan)();
   renderTimer();
 }
@@ -408,6 +408,7 @@ function viewPlan() {
   <h1>${greeting()}</h1>
   <div class="muted small">${new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}${doneToday ? ` · сделано ${doneToday}` : ''}</div>
   <h2>На сегодня</h2>`;
+  if (!ns.length) html += `<div class="card soft small">${ic('check', 16)} Всё из подсказок на сегодня сделано. Можно отдохнуть без вины.</div>`;
   for (const n of shown) {
     html += `<div class="card nudge ${n.cls || ''}"><div class="ico">${ic(n.icon)}</div><div>${n.html}
       ${n.aid ? `<div class="acts">
@@ -531,10 +532,6 @@ function viewActs() {
   const stats = liveActs().map(a => ({ a, s: actStats(a.id) }));
   const ranked = stats.filter(x => x.s.moodN >= 1).sort((x, y) => (y.s.mood - x.s.mood) || (y.s.total - x.s.total));
   let html = `<h1>Занятия</h1>`;
-  if (ranked.length) {
-    html += `<h2>Что помогает больше всего</h2><div class="card">` + ranked.map((x, i) => `<div class="rank"><span class="n">${i + 1}</span>${ic(x.a.icon)}
-      <span>${esc(x.a.name)}</span><span class="muted small">${moodText(x.s.mood)}</span></div>`).join('') + `</div><h2>Все занятия</h2>`;
-  }
   for (const { a, s } of stats) {
     const sinceTxt = s.since === null ? 'ещё не было' : s.since === 0 ? 'сегодня' : s.since === 1 ? 'вчера' : `${days(s.since)} назад`;
     html += `<div class="card act">
@@ -548,42 +545,101 @@ function viewActs() {
       </div></div>`;
   }
   html += `<button class="btn ghost block" data-add-act>${ic('plus', 16)} Новое занятие</button>`;
+  if (ranked.length) {
+    html += `<details class="card" style="margin-top:20px"><summary>Что помогает больше всего</summary>` + ranked.map((x, i) => `<div class="rank"><span class="n">${i + 1}</span>${ic(x.a.icon)}
+      <span>${esc(x.a.name)}</span><span class="muted small">${moodText(x.s.mood)}</span></div>`).join('') + `</details>`;
+  }
   return html;
 }
 
-// ---------- экран «Победы» ----------
-function viewWins() {
-  const wins = allWins();
-  const t = today();
-  const memories = [7, 14, 30, 90, 365].map(n => {
-    const k = dkey(addDays(new Date(), -n));
-    return { n, k, w: wins.filter(x => x.date === k), min: state.sessions.filter(s => s.date === k).reduce((a, s) => a + s.min, 0) };
-  }).filter(m => m.w.length || m.min);
-  const week = state.sessions.filter(s => s.date >= dkey(addDays(new Date(), -6)));
-  const labels = { 7: 'Неделю назад', 14: 'Две недели назад', 30: 'Месяц назад', 90: 'Три месяца назад', 365: 'Год назад' };
-  let html = `<h1>Маленькие победы</h1>
-  <p class="muted small">Ответила на письмо, вышла на улицу, поела нормально — это считается. При выгорании мозг забывает хорошее, поэтому записываем.</p>
-  <form class="row" id="winForm" style="margin:12px 0">
-    <input id="winInput" maxlength="160" autocomplete="off" aria-label="Победа">
-    <button class="btn primary" type="submit" aria-label="Добавить">${ic('plus', 18)}</button>
-  </form>
-  <div class="card soft"><div class="row between small"><span>Занятий за 7 дней</span><b>${week.length} · ${fmtMin(week.reduce((a, s) => a + s.min, 0))}</b></div>
-  <div class="row between small" style="margin-top:4px"><span>Побед записано</span><b>${wins.length}</b></div></div>`;
-  if (memories.length) {
-    html += `<h2>В этот день раньше</h2>`;
-    for (const m of memories) {
-      html += `<div class="card memory-card"><b>${labels[m.n]}</b> <span class="muted small">${fmtDate(m.k)}</span>
-        ${m.min ? `<div class="small muted">Занималась собой ${fmtMin(m.min)}</div>` : ''}
-        ${m.w.map(w => `<div>${esc(w.text)}</div>`).join('')}</div>`;
+// ---------- экран «История» (как карта коммитов на GitHub) ----------
+const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+let histSel = null;
+function dayScores(aid) {
+  const by = {};
+  for (const x of state.sessions) if (!aid || x.aid === aid) by[x.date] = (by[x.date] || 0) + x.min;
+  if (!aid) for (const [k, n] of Object.entries(state.doneLog || {})) by[k] = (by[k] || 0) + n * 15; // дело ≈ 15 минут
+  return by;
+}
+function streaks(by) {
+  const keys = Object.keys(by).filter(k => by[k] > 0).sort();
+  let best = 0, cur = 0, prev = null;
+  for (const k of keys) { cur = prev && dkey(addDays(fromKey(prev), 1)) === k ? cur + 1 : 1; best = Math.max(best, cur); prev = k; }
+  let now = 0, d = new Date();
+  if (!(by[dkey(d)] > 0)) d = addDays(d, -1);
+  while (by[dkey(d)] > 0) { now++; d = addDays(d, -1); }
+  return { best, now };
+}
+function heatmap(by, aid, weeks) {
+  const th = aid ? [15, 30, 60] : [20, 45, 90];
+  const lvl = v => !v ? 0 : v < th[0] ? 1 : v < th[1] ? 2 : v < th[2] ? 3 : 4;
+  const t = new Date(), dow = (t.getDay() + 6) % 7;
+  const start = addDays(t, -dow - (weeks - 1) * 7);
+  let months = '<span></span>', cells = ['Пн', '', 'Ср', '', 'Пт', '', ''].map(x => `<span class="dl">${x}</span>`).join('');
+  let lastM = -1;
+  for (let w = 0; w < weeks; w++) {
+    const m = addDays(start, w * 7).getMonth();
+    const show = m !== lastM && (w > 0 || addDays(start, 14).getMonth() === m);
+    months += `<span>${show ? MONTHS[m] : ''}</span>`;
+    lastM = m;
+    for (let d = 0; d < 7; d++) {
+      const k = dkey(addDays(start, w * 7 + d));
+      if (k > today()) { cells += '<span class="c fut"></span>'; continue; }
+      cells += `<button class="c l${lvl(by[k])} ${k === histSel ? 'sel' : ''}" data-day="${k}" aria-label="${k}"></button>`;
     }
   }
-  html += `<h2>Все победы</h2>`;
-  if (!wins.length) html += `<p class="muted small">Пока пусто. Начни с самой маленькой.</p>`;
-  let cur = '';
-  for (const w of wins.slice(0, 200)) {
-    if (w.date !== cur) { cur = w.date; html += `<div class="muted small" style="margin:12px 0 4px">${w.date === t ? 'Сегодня' : fmtDate(w.date)}</div>`; }
-    html += `<div class="card win"><div class="row between"><span>${esc(w.text)}${w.sub ? `<span class="muted small"> · ${esc(w.sub)}</span>` : ''}</span>
-      ${w.auto ? '' : `<button class="iconbtn" data-del-win="${w.id}" aria-label="Удалить">${ic('x', 16)}</button>`}</div></div>`;
+  const cols = `grid-template-columns: 18px repeat(${weeks}, 1fr)`;
+  return `<div class="hm-months" style="${cols}">${months}</div><div class="hm" style="${cols}">${cells}</div>
+    <div class="hm-legend">меньше <i class="l0"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i> больше</div>`;
+}
+function strip(aid) {
+  const by = dayScores(aid);
+  let html = '';
+  for (let i = 27; i >= 0; i--) {
+    const v = by[dkey(addDays(new Date(), -i))] || 0;
+    html += `<i class="${!v ? 'l0' : v < 15 ? 'l1' : v < 30 ? 'l2' : v < 60 ? 'l3' : 'l4'}"></i>`;
+  }
+  return `<div class="strip">${html}</div>`;
+}
+function viewHist() {
+  const aid = state.histFilter && actById(state.histFilter) ? state.histFilter : '';
+  const by = dayScores(aid);
+  const WEEKS = 26;
+  const from = dkey(addDays(new Date(), -WEEKS * 7));
+  const inWin = Object.keys(by).filter(k => k >= from && by[k] > 0);
+  const minutes = state.sessions.filter(x => x.date >= from && (!aid || x.aid === aid)).reduce((a, x) => a + x.min, 0);
+  const st = streaks(by);
+  let html = `<h1>История</h1>
+  <div class="chips">
+    <button class="chip ${!aid ? 'on' : ''}" data-hf="">Всё</button>
+    ${liveActs().map(a => `<button class="chip ${aid === a.id ? 'on' : ''}" data-hf="${a.id}">${ic(a.icon, 15)}${esc(a.name)}</button>`).join('')}
+  </div>
+  <div class="card" style="margin-top:10px">${heatmap(by, aid, WEEKS)}</div>
+  <div class="statgrid">
+    <div class="card"><b>${inWin.length}</b><span>${plural(inWin.length, 'активный день', 'активных дня', 'активных дней')} за полгода</span></div>
+    <div class="card"><b>${fmtMin(minutes)}</b><span>${aid ? 'вложено' : 'на занятия'} за полгода</span></div>
+    <div class="card"><b>${st.now}</b><span>${plural(st.now, 'день', 'дня', 'дней')} подряд сейчас</span></div>
+    <div class="card"><b>${st.best}</b><span>рекорд подряд</span></div>
+  </div>`;
+
+  if (histSel) {
+    const ss = state.sessions.filter(x => x.date === histSel && (!aid || x.aid === aid));
+    const tasksN = aid ? 0 : (state.doneLog[histSel] || 0);
+    const wins = aid ? [] : state.wins.filter(w => w.date === histSel);
+    html += `<div class="card"><div class="row between"><b>${histSel === today() ? 'Сегодня' : fmtDate(histSel)}</b>
+      <button class="iconbtn" data-day="${histSel}" aria-label="Закрыть">${ic('x', 16)}</button></div>
+      ${ss.map(x => { const a = actById(x.aid); return `<div class="row small" style="margin-top:6px">${a ? ic(a.icon, 16) : ''}<span class="grow">${a ? esc(a.name) : ''}${x.note ? ` <span class="muted">— ${esc(x.note)}</span>` : ''}</span><span class="muted">${fmtMin(x.min)}</span></div>`; }).join('')}
+      ${tasksN ? `<div class="small muted" style="margin-top:6px">Дел из плана выполнено: ${tasksN}</div>` : ''}
+      ${wins.map(w => `<div class="small" style="margin-top:6px">${esc(w.text)}</div>`).join('')}
+      ${!ss.length && !tasksN && !wins.length ? '<div class="small muted" style="margin-top:6px">В этот день ничего не отмечено.</div>' : ''}</div>`;
+  }
+
+  if (!aid) {
+    html += `<h2>По занятиям · 4 недели</h2>`;
+    for (const a of liveActs()) {
+      const s = actStats(a.id);
+      html += `<button class="card actstrip" data-hf="${a.id}"><div class="row between small"><span class="row" style="gap:8px">${ic(a.icon, 16)}<b>${esc(a.name)}</b></span><span class="muted">${fmtMin(s.total)}</span></div>${strip(a.id)}</button>`;
+    }
   }
   return html;
 }
@@ -647,6 +703,12 @@ function viewMore() {
     <input id="doneName" value="${esc(state.doneShortcut)}">
   </div>
 
+  <h2>Таймер</h2>
+  <div class="card small">
+    <div class="switch"><span>Спрашивать «как успехи?» каждые 30 минут, пока идёт таймер</span><input type="checkbox" id="timerAlerts" ${state.timerAlerts ? 'checked' : ''}></div>
+    <p class="muted" style="margin-top:8px">При запуске таймера в Календарь добавляется событие на 3 часа с уведомлениями каждые полчаса. Если закончишь раньше — оставшиеся уведомления можно просто смахнуть.</p>
+  </div>
+
   <h2>Когда открываешь Instagram</h2>
   <div class="card small">
     <details><summary>Автоматизация в «Командах» (3 минуты)</summary>
@@ -699,9 +761,33 @@ function renderTimer() {
 }
 function startTimer(aid) {
   if (state.timer) { toast('Таймер уже идёт — сначала заверши его'); return; }
-  state.timer = { aid, start: Date.now() };
+  state.timer = { aid, start: Date.now(), checked: 0 };
   closeModal();
   commit('Таймер пошёл. Можно отложить телефон');
+  const a = actById(aid);
+  if (state.timerAlerts && a) {
+    // событие в Календаре на 3 часа с уведомлениями каждые 30 минут
+    openIcs([icsEvent({
+      title: `Росток: ${a.name}`, date: today(), time: hm(new Date()), dur: 180,
+      alarms: [30, 60, 90, 120, 150, 180],
+      alarmText: `Как успехи с «${a.name}»? Продолжаешь? Если закончила — отметь в Ростке.`,
+    })], 'rostok-timer.ics');
+  }
+}
+function timerCheckIn() {
+  if (!state.timer) return false;
+  const min = Math.floor((Date.now() - state.timer.start) / 60000);
+  const marks = Math.floor(min / 30);
+  if (marks <= (state.timer.checked || 0)) return false;
+  state.timer.checked = marks; save();
+  const a = actById(state.timer.aid);
+  openModal(`
+    <div class="big-ic">${ic(a ? a.icon : 'timer', 32)}</div>
+    <h2 class="center">Прошло ${fmtMin(min)}</h2>
+    <p class="center">Как успехи с «${esc(a ? a.name : '')}»? Продолжаешь?</p>
+    <button class="btn primary block" data-close>Продолжаю</button>
+    <button class="btn block" data-stop>Закончила</button>`);
+  return true;
 }
 function stopTimer() {
   const { aid, start } = state.timer;
@@ -743,6 +829,7 @@ function logSession(aid, min, taskId) {
 // ---------- дела ----------
 function completeTask(t, silent) {
   t.done = true; t.doneDate = today();
+  state.doneLog[today()] = (state.doneLog[today()] || 0) + 1;
   navigator.vibrate?.(20);
   if (t.src === 'rem' && state.writeBack) { save(); runShortcut(state.doneShortcut, t.text); return; }
   if (!silent) commit('Готово');
@@ -908,7 +995,7 @@ document.addEventListener('click', e => {
 
   if (ds.toggle) {
     const task = state.tasks.find(x => x.id === ds.toggle);
-    if (task.done) { task.done = false; task.doneDate = null; commit(); return; }
+    if (task.done) { if (state.doneLog[task.doneDate] > 0) state.doneLog[task.doneDate]--; task.done = false; task.doneDate = null; commit(); return; }
     if (task.aid && actById(task.aid)) { logSession(task.aid, task.dur, task.id); return; }
     completeTask(task); return;
   }
@@ -935,6 +1022,8 @@ document.addEventListener('click', e => {
     openIcs(pend.map(x => icsEvent({ title: x.text, date: x.date && x.date > today() ? x.date : today(), time: x.time, dur: x.dur })), 'rostok-day.ics');
     return;
   }
+  if (ds.day) { histSel = histSel === ds.day ? null : ds.day; render(); return; }
+  if (ds.hf !== undefined) { state.histFilter = ds.hf; histSel = null; commit(); window.scrollTo(0, 0); return; }
   if ('showDone' in ds) { state.showDone = !state.showDone; commit(); return; }
   if ('clearDone' in ds) {
     const n = state.tasks.filter(t => t.done).length;
@@ -954,7 +1043,7 @@ document.addEventListener('click', e => {
     return editTask(null, 2, { text: a.name, aid: a.id, dur: a.goal, part: a.daily ? 'am' : 'pm' });
   }
   if (ds.start) return startTimer(ds.start);
-  if ('stop' in ds) return stopTimer();
+  if ('stop' in ds) { if (!state.timer) { closeModal(); return; } return stopTimer(); }
   if (ds.log) return logSession(ds.log);
   if (ds.editAct) return editAct(ds.editAct);
   if ('addAct' in ds) return editAct(null);
@@ -1012,6 +1101,7 @@ document.addEventListener('change', e => {
   if (id === 'syncName') { state.syncShortcut = e.target.value.trim() || 'Росток'; commit(); }
   if (id === 'doneName') { state.doneShortcut = e.target.value.trim() || 'Росток готово'; commit(); }
   if (id === 'writeBack') { state.writeBack = e.target.checked; save(); }
+  if (id === 'timerAlerts') { state.timerAlerts = e.target.checked; save(); }
   if (id === 'importFile') {
     const file = e.target.files[0];
     if (!file) return;
@@ -1035,7 +1125,10 @@ function handleHash() {
   return true;
 }
 window.addEventListener('hashchange', () => { if (handleHash()) render(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#modal').classList.contains('hidden')) render(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if ($('#modal').classList.contains('hidden')) { render(); timerCheckIn(); }
+});
 
 // ---------- старт ----------
 handleHash();
