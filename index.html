@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Росток</title>
+  <meta name="description" content="Мягкий трекер привычек в игровом формате">
+  <meta name="theme-color" content="#1d1b26">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="screen"></main>
+
+  <button id="sos" class="sos" aria-label="Тянет залипнуть">🆘 Тянет залипнуть</button>
+
+  <nav class="tabs">
+    <button data-tab="today" class="active"><span>☀️</span>Сегодня</button>
+    <button data-tab="focus"><span>📵</span>Без телефона</button>
+    <button data-tab="hero"><span>🌱</span>Росток</button>
+    <button data-tab="shop"><span>🎁</span>Награды</button>
+  </nav>
+
+  <div id="modal" class="modal hidden"><div class="sheet" id="sheet"></div></div>
+  <div id="focusOverlay" class="focus-overlay hidden"></div>
+  <div id="toasts" class="toasts"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
