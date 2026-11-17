@@ -1,6 +1,6 @@
 'use strict';
-/* Росток — мягкий трекер привычек в игровом формате.
-   Все данные хранятся только на этом устройстве (localStorage). */
+/* Росток — план дня по Эйзенхауэру + время на хобби и поиск работы.
+   Данные хранятся только на этом устройстве. Напоминания — через Календарь iPhone. */
 
 // ---------- утилиты ----------
 const $ = (s, el = document) => el.querySelector(s);
@@ -8,7 +8,10 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
 const dkey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const fromKey = k => new Date(k + 'T12:00:00');
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const today = () => dkey();
+const daysBetween = (a, b) => Math.round((fromKey(b) - fromKey(a)) / 86400000);
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 const plural = (n, one, few, many) => {
   const m10 = n % 10, m100 = n % 100;
@@ -16,72 +19,57 @@ const plural = (n, one, few, many) => {
   if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
   return many;
 };
+const days = n => `${n} ${plural(n, 'день', 'дня', 'дней')}`;
+const fmtMin = m => {
+  m = Math.round(m);
+  const h = Math.floor(m / 60), r = m % 60;
+  if (!h) return `${r} мин`;
+  return r ? `${h} ч ${r} мин` : `${h} ч`;
+};
+const fmtDate = k => fromKey(k).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 
 // ---------- справочники ----------
-const STATS = {
-  body:   { name: 'Тело',    emoji: '💪' },
-  mind:   { name: 'Разум',   emoji: '🧠' },
-  craft:  { name: 'Ремесло', emoji: '🧶' },
-  career: { name: 'Карьера', emoji: '💼' },
-  free:   { name: 'Свобода', emoji: '🕊️' },
-  calm:   { name: 'Покой',   emoji: '🌿' },
+const CATS = {
+  job:     { name: 'Работа',        hint: 'напоминаю каждый день' },
+  restore: { name: 'Восстановление', hint: 'хобби и антистресс' },
+  grow:    { name: 'Развитие',      hint: 'тело и ум' },
 };
-const PLANTS = ['🌰', '🌱', '🌿', '🪴', '🌳', '🌸', '🌺', '🌻', '🏵️', '🌈'];
-const TITLES = ['Семечко', 'Проклюнулась', 'Росточек', 'Тянется к свету', 'Крепнет', 'Цветёт', 'Сад внутри', 'Солнечная', 'Легенда сада', 'Радуга'];
-const ENERGY = {
-  low:  { label: '🪫 На нуле',   text: 'Режим минималок. Сегодня достаточно одного мини-дела — правда. Каждое дело даёт ×1.5 опыта, потому что сейчас это сложнее, чем обычно.' },
-  mid:  { label: '🔋 Так себе',  text: 'Выбери 1–3 дела. Мини-версия — это не «халтура», это и есть победа.' },
-  high: { label: '⚡ Есть силы', text: 'Здорово! Но без рывков — выгорание их не любит. Пара полных версий, остальное мини.' },
+const MOODS = [
+  { v: 1, e: '😣', t: 'Хуже' },
+  { v: 2, e: '😐', t: 'Так же' },
+  { v: 3, e: '🙂', t: 'Лучше' },
+  { v: 4, e: '😊', t: 'Намного лучше' },
+];
+const QUADS = {
+  1: { name: '🔥 Срочно и важно', sub: 'Сделать сегодня' },
+  2: { name: '🌱 Важно, но не срочно', sub: 'Поиск работы, хобби, здоровье. Этот квадрат съедают все остальные, поэтому планируй его первым' },
+  3: { name: '⚡ Срочно, не важно', sub: 'Быстро или попросить' },
+  4: { name: '🍃 Не важно и не срочно', sub: 'Можно отпустить' },
 };
-const FOCUS_PRESETS = [2, 5, 10, 15, 25];
+const MILESTONES = [60, 180, 300, 600, 1200, 1800, 3000, 6000, 12000];
 
-const DEFAULT_HABITS = [
-  { id: 'h1', name: 'Зарядка утром', emoji: '🤸', stat: 'body',   mini: '1 упражнение',       full: '10 минут' },
-  { id: 'h2', name: 'Силовая',       emoji: '🏋️', stat: 'body',   mini: '10 приседаний',      full: 'Тренировка' },
-  { id: 'h3', name: 'Английский',    emoji: '🇬🇧', stat: 'mind',   mini: '5 новых слов',       full: '20 минут' },
-  { id: 'h4', name: 'Чтение',        emoji: '📖', stat: 'mind',   mini: '1 страница',         full: '20 минут' },
-  { id: 'h5', name: 'Вязание',       emoji: '🧶', stat: 'craft',  mini: '1 ряд',              full: '30 минут' },
-  { id: 'h6', name: 'Поиск работы',  emoji: '🔎', stat: 'career', mini: 'Открыть 1 вакансию', full: 'Отправить отклик' },
-];
-const DEFAULT_REWARDS = [
-  { id: 'r1', name: 'Вкусный кофе или десерт',       emoji: '☕', cost: 30 },
-  { id: 'r2', name: 'Серия любимого сериала',        emoji: '📺', cost: 40 },
-  { id: 'r3', name: 'Вечер ничегонеделания без вины', emoji: '🛋️', cost: 60 },
-  { id: 'r4', name: 'Новый моток пряжи',             emoji: '🧶', cost: 150 },
-];
-
-const ACHIEVEMENTS = [
-  { id: 'first',   emoji: '👣', name: 'Первый шаг',        hint: 'Отметь любое дело',             test: a => a.habitsDone >= 1 },
-  { id: 'low',     emoji: '🪫', name: 'Через силу',        hint: 'Дело в день «на нуле»',          test: a => a.lowDone >= 1 },
-  { id: 'rest',    emoji: '🛌', name: 'Право на отдых',    hint: 'Осознанный день отдыха',         test: a => a.rest >= 1 },
-  { id: 'f5',      emoji: '🤫', name: '5 минут тишины',    hint: 'Квест без телефона 5 мин',       test: a => a.focusBest >= 5 },
-  { id: 'f15',     emoji: '🕊️', name: '15 минут свободы',  hint: 'Квест без телефона 15 мин',      test: a => a.focusBest >= 15 },
-  { id: 'f60',     emoji: '⏳', name: 'Час на воле',        hint: 'Всего 60 мин без телефона',      test: a => a.focusTotal >= 60 },
-  { id: 'door',    emoji: '🚪', name: 'Дверь закрыта',     hint: 'Душ/туалет без телефона',        test: a => a.doors >= 1 },
-  { id: 'door10',  emoji: '🛁', name: 'Свободная ванна',   hint: '10 раз без телефона за дверью',  test: a => a.doors >= 10 },
-  { id: 'wave',    emoji: '🌊', name: 'Сёрферка',          hint: 'Пережди волну желания',          test: a => a.waves >= 1 },
-  { id: 'wave10',  emoji: '🏄', name: 'Укротительница волн', hint: 'Пережди 10 волн',              test: a => a.waves >= 10 },
-  { id: 'back',    emoji: '🧭', name: 'Вернулась сама',    hint: 'Осознанно посмотри и вернись',   test: a => a.scrolls >= 1 },
-  { id: 's3',      emoji: '🔥', name: '3 дня подряд',      hint: 'Серия 3 дня',                    test: a => a.streakBest >= 3 },
-  { id: 's7',      emoji: '🌟', name: 'Неделя',            hint: 'Серия 7 дней',                   test: a => a.streakBest >= 7 },
-  { id: 's30',     emoji: '👑', name: 'Месяц',             hint: 'Серия 30 дней',                  test: a => a.streakBest >= 30 },
-  { id: 'full10',  emoji: '🚀', name: 'Разогналась',       hint: '10 полных версий',               test: a => a.fullDone >= 10 },
-  { id: 'job5',    emoji: '📨', name: 'В поиске',          hint: '5 дел по карьере',               test: a => a.careerDone >= 5 },
-  { id: 'buy',     emoji: '🎁', name: 'Заслужила',         hint: 'Возьми первую награду',          test: a => a.purchases >= 1 },
-  { id: 'lvl5',    emoji: '🌸', name: 'Цветение',          hint: 'Достигни 5 уровня',              test: a => a.level >= 5 },
+const DEFAULT_ACTS = [
+  { id: 'job',   name: 'Поиск работы',    emoji: '💼', cat: 'job',     goal: 30 },
+  { id: 'video', name: 'Монтаж видео',    emoji: '🎬', cat: 'restore', goal: 30 },
+  { id: 'knit',  name: 'Вязание',         emoji: '🧶', cat: 'restore', goal: 20 },
+  { id: 'walk',  name: 'Прогулка',        emoji: '🚶‍♀️', cat: 'restore', goal: 20 },
+  { id: 'read',  name: 'Чтение',          emoji: '📖', cat: 'restore', goal: 20 },
+  { id: 'morn',  name: 'Зарядка',         emoji: '🤸', cat: 'grow',    goal: 10 },
+  { id: 'gym',   name: 'Силовая',         emoji: '🏋️', cat: 'grow',    goal: 40 },
+  { id: 'eng',   name: 'Английский',      emoji: '🇬🇧', cat: 'grow',    goal: 20 },
 ];
 
 // ---------- состояние ----------
-const KEY = 'rostok-v1';
+const KEY = 'rostok-v2';
 function defaultState() {
   return {
-    version: 1, name: '', onboarded: false,
-    habits: DEFAULT_HABITS.map(h => ({ ...h })),
-    rewards: DEFAULT_REWARDS.map(r => ({ ...r })),
-    log: {}, purchases: [], seenAch: [],
-    scroll: null,   // {start} — «смотрю осознанно»
-    door: null,     // {start} — телефон за дверью
-    lastFocus: 5, tab: 'today',
+    version: 2, name: '', onboarded: false, tab: 'plan',
+    acts: DEFAULT_ACTS.map(a => ({ ...a })),
+    sessions: [],   // {id, aid, date, min, mood, note, at}
+    tasks: [],      // {id, text, q, date, time, dur, aid, done, doneDate}
+    wins: [],       // {id, date, text}
+    insta: [],      // {at, choice}
+    timer: null,    // {aid, start}
   };
 }
 let state = load();
@@ -89,117 +77,139 @@ function load() {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return { ...defaultState(), ...JSON.parse(raw) };
-  } catch (e) { /* пустое хранилище — начинаем заново */ }
+  } catch (e) { /* начинаем с чистого листа */ }
   return defaultState();
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { toast('Не получилось сохранить 😔'); }
 }
-const today = () => dkey();
-function day(k = today()) {
-  if (!state.log[k]) state.log[k] = { energy: null, done: {}, focus: [], waves: 0, doors: 0, scrolls: 0, rest: false, wins: [] };
-  return state.log[k];
-}
-const peek = k => state.log[k];
-const habitById = id => state.habits.find(h => h.id === id);
-const activeHabits = () => state.habits.filter(h => !h.archived);
+const actById = id => state.acts.find(a => a.id === id);
+const liveActs = () => state.acts.filter(a => !a.archived);
 
-// ---------- очки ----------
-function habitXP(level, low) { const base = level === 'full' ? 25 : 10; return low ? Math.round(base * 1.5) : base; }
-function dayEvents(d) {
-  const ev = [];
-  const low = d.energy === 'low';
-  for (const [hid, lvl] of Object.entries(d.done || {})) {
-    const h = habitById(hid);
-    ev.push({ stat: h ? h.stat : 'calm', xp: habitXP(lvl, low), coins: lvl === 'full' ? 5 : 2 });
-  }
-  for (const f of d.focus || []) ev.push({ stat: 'free', xp: f.ok ? f.min * 3 : f.done, coins: f.ok ? f.min : 0 });
-  if (d.waves) ev.push({ stat: 'calm', xp: d.waves * 15, coins: d.waves * 3 });
-  if (d.doors) ev.push({ stat: 'free', xp: d.doors * 10, coins: d.doors * 2 });
-  if (d.scrolls) ev.push({ stat: 'calm', xp: d.scrolls * 5, coins: 0 });
-  if (d.rest) ev.push({ stat: 'calm', xp: 15, coins: 2 });
-  if (d.wins?.length) ev.push({ stat: 'calm', xp: d.wins.length * 3, coins: d.wins.length });
-  return ev;
+// ---------- статистика по занятиям ----------
+function actStats(aid) {
+  const ss = state.sessions.filter(s => s.aid === aid);
+  const weekAgo = dkey(addDays(new Date(), -6));
+  const total = ss.reduce((s, x) => s + x.min, 0);
+  const week = ss.filter(s => s.date >= weekAgo).reduce((s, x) => s + x.min, 0);
+  const todayMin = ss.filter(s => s.date === today()).reduce((s, x) => s + x.min, 0);
+  const last = ss.reduce((m, s) => (s.date > m ? s.date : m), '');
+  const since = last ? daysBetween(last, today()) : null;
+  const moods = ss.filter(s => s.mood).map(s => s.mood);
+  const mood = moods.length ? moods.reduce((a, b) => a + b, 0) / moods.length : null;
+  const lastMood = [...ss].reverse().find(s => s.mood)?.mood || null;
+  // серия: подряд идущие дни с занятием
+  const dates = new Set(ss.map(s => s.date));
+  let streak = 0, d = new Date();
+  if (!dates.has(dkey(d))) d = addDays(d, -1);
+  while (dates.has(dkey(d))) { streak++; d = addDays(d, -1); }
+  return { count: ss.length, total, week, todayMin, last, since, mood, moodN: moods.length, lastMood, streak };
 }
-function totals() {
-  const stats = Object.fromEntries(Object.keys(STATS).map(k => [k, 0]));
-  let xp = 0, coins = 0;
-  for (const d of Object.values(state.log)) for (const e of dayEvents(d)) { xp += e.xp; coins += e.coins; stats[e.stat] = (stats[e.stat] || 0) + e.xp; }
-  const spent = state.purchases.reduce((s, p) => s + p.cost, 0);
-  return { xp, coins: coins - spent, stats };
-}
-const dayXP = d => d ? dayEvents(d).reduce((s, e) => s + e.xp, 0) : 0;
-function levelInfo(xp) {
-  let L = 1, need = 100, rest = xp;
-  while (rest >= need) { rest -= need; L++; need = 100 + (L - 1) * 50; }
-  return { L, cur: rest, need };
-}
-const isActive = d => !!d && dayXP(d) > 0;
-function streak() {
-  let n = 0, d = new Date();
-  if (!isActive(peek(dkey(d)))) d = addDays(d, -1);
-  while (isActive(peek(dkey(d)))) { n++; d = addDays(d, -1); }
-  return n;
-}
-function bestStreak() {
-  const keys = Object.keys(state.log).filter(k => isActive(state.log[k])).sort();
-  let best = 0, cur = 0, prev = null;
-  for (const k of keys) {
-    const dt = new Date(k + 'T12:00:00');
-    cur = (prev && dkey(addDays(prev, 1)) === k) ? cur + 1 : 1;
-    best = Math.max(best, cur); prev = dt;
-  }
-  return best;
-}
-function aggregates() {
-  const a = { habitsDone: 0, fullDone: 0, lowDone: 0, careerDone: 0, focusBest: 0, focusTotal: 0, waves: 0, doors: 0, scrolls: 0, rest: 0 };
-  for (const d of Object.values(state.log)) {
-    for (const [hid, lvl] of Object.entries(d.done || {})) {
-      a.habitsDone++; if (lvl === 'full') a.fullDone++;
-      if (d.energy === 'low') a.lowDone++;
-      if (habitById(hid)?.stat === 'career') a.careerDone++;
-    }
-    for (const f of d.focus || []) { if (f.ok) a.focusBest = Math.max(a.focusBest, f.min); a.focusTotal += f.ok ? f.min : f.done; }
-    a.waves += d.waves || 0; a.doors += d.doors || 0; a.scrolls += d.scrolls || 0; if (d.rest) a.rest++;
-  }
-  a.purchases = state.purchases.length;
-  a.streakBest = bestStreak();
-  a.level = levelInfo(totals().xp).L;
-  return a;
-}
+const moodFace = m => MOODS[Math.min(3, Math.max(0, Math.round(m) - 1))].e;
+const nextMilestone = total => MILESTONES.find(m => m > total) || Math.ceil((total + 1) / 6000) * 6000;
 
-// ---------- действие + награды ----------
-function commit(msg) {
-  const before = levelInfo(lastXP).L;
-  save();
-  const t = totals();
-  const after = levelInfo(t.xp).L;
-  lastXP = t.xp;
-  if (msg) toast(msg);
-  render();
-  if (after > before) setTimeout(() => levelUp(after), 400);
-  checkAchievements();
-}
-let lastXP = totals().xp;
-function checkAchievements() {
-  const a = aggregates();
-  for (const ach of ACHIEVEMENTS) {
-    if (!state.seenAch.includes(ach.id) && ach.test(a)) {
-      state.seenAch.push(ach.id);
-      setTimeout(() => toast(`🏆 ${ach.emoji} ${ach.name}`), 700);
+// ---------- подсказки дня ----------
+function nudges() {
+  const out = [];
+  const hour = new Date().getHours();
+
+  // 1. Поиск работы — каждый день
+  for (const a of liveActs().filter(a => a.cat === 'job')) {
+    const s = actStats(a.id);
+    const planned = state.tasks.some(t => t.aid === a.id && t.date === today() && !t.done);
+    if (s.todayMin >= a.goal) {
+      out.push({ e: '✅', html: `<b>${esc(a.name)} сегодня: ${fmtMin(s.todayMin)}.</b> Всего ты уже вложила ${fmtMin(s.total)}. Дальше — больше!` });
+    } else if (s.todayMin > 0) {
+      out.push({ e: a.emoji, html: `<b>${esc(a.name)}: уже ${fmtMin(s.todayMin)} сегодня.</b> До цели ${fmtMin(a.goal - s.todayMin)}. Добьёшь?`, aid: a.id });
+    } else {
+      const tail = s.since == null ? 'Начни с малого: открой 3 вакансии и сохрани одну.'
+        : s.since === 1 ? 'Вчера ты это делала — продолжай, пока есть инерция.'
+        : `Последний раз — ${days(s.since)} назад. Даже 20 минут сдвинут дело.`;
+      out.push({ e: a.emoji, html: `<b>Найди сегодня ${fmtMin(a.goal)} на ${esc(a.name.toLowerCase())}.</b> ${tail}`, aid: a.id, plan: !planned });
     }
   }
-  save();
+
+  // 2. Давно не было восстанавливающего занятия
+  const restore = liveActs().filter(a => a.cat === 'restore').map(a => ({ a, s: actStats(a.id) }));
+  const neglected = restore.filter(x => x.s.since !== null && x.s.since >= 3).sort((x, y) => y.s.since - x.s.since)[0];
+  if (neglected) {
+    const { a, s } = neglected;
+    const moodTxt = s.mood ? ` Обычно после этого тебе ${s.mood >= 3.5 ? 'намного лучше' : s.mood >= 2.5 ? 'лучше' : 'чуть спокойнее'} ${moodFace(s.mood)}.` : '';
+    out.push({ e: a.emoji, html: `<b>${esc(a.name)}: ${days(s.since)} перерыва.</b>${moodTxt} От этого правда станет легче — может, ${fmtMin(a.goal)} сегодня?`, aid: a.id, plan: true });
+  } else {
+    const never = restore.filter(x => x.s.count === 0);
+    if (never.length) {
+      const { a } = pick(never);
+      out.push({ e: a.emoji, html: `<b>${esc(a.name)}</b> ещё ни разу не было отмечено. Попробуй ${fmtMin(Math.min(15, a.goal))} — просто посмотреть, как ощущается.`, aid: a.id, plan: true });
+    }
+  }
+
+  // 3. Прогулка
+  const walk = liveActs().find(a => a.id === 'walk' && !a.archived);
+  if (walk && hour >= 9 && hour < 21 && !actStats(walk.id).todayMin) {
+    out.push({ e: '🚶‍♀️', html: '<b>Прогуляйся 15 минут.</b> Можно до магазина и обратно. Телефон — в карман, не в руку.', aid: walk.id });
+  }
+
+  // 4. Набранный темп
+  const momentum = liveActs().map(a => ({ a, s: actStats(a.id) })).filter(x => x.s.week > 0 && x.a.cat !== 'job').sort((x, y) => y.s.week - x.s.week)[0];
+  if (momentum) {
+    const { a, s } = momentum, next = nextMilestone(s.total);
+    out.push({ e: '📈', html: `<b>${esc(a.name)}: ${fmtMin(s.total)} всего, ${fmtMin(s.week)} за неделю.</b> До отметки «${fmtMin(next)}» осталось ${fmtMin(next - s.total)}. Дальше — больше!` });
+  }
+
+  // 5. Вспомнить победу
+  const old = allWins().filter(w => daysBetween(w.date, today()) >= 2);
+  if (old.length) {
+    const w = pick(old);
+    out.push({ e: '💚', cls: 'memory', html: `<b>Помнишь?</b> ${fmtDate(w.date)}: «${esc(w.text)}». Ты это уже умеешь.` });
+  }
+  return out;
 }
-function levelUp(L) {
-  openModal(`
-    <div class="big-emoji">${PLANTS[Math.min(L - 1, PLANTS.length - 1)]}</div>
-    <h2 class="center">Уровень ${L}!</h2>
-    <p class="center">Твой росток: <b>${TITLES[Math.min(L - 1, TITLES.length - 1)]}</b>.</p>
-    <p class="center muted">Это сложилось из маленьких шагов. Именно так это и работает.</p>
-    <button class="btn primary block" data-close>Ура 🌿</button>`);
-  navigator.vibrate?.([80, 60, 80, 60, 160]);
+
+// ---------- победы ----------
+function allWins() {
+  const fromSessions = state.sessions.filter(s => s.note).map(s => {
+    const a = actById(s.aid);
+    return { id: s.id, date: s.date, text: `${a ? a.emoji + ' ' : ''}${s.note}`, auto: true };
+  });
+  return [...state.wins, ...fromSessions].sort((a, b) => (a.date < b.date ? 1 : -1));
 }
+
+// ---------- календарь (.ics) ----------
+const icsEsc = s => String(s).replace(/\\/g, '\\\\').replace(/[,;]/g, m => '\\' + m).replace(/\n/g, '\\n');
+const icsDT = (k, hm) => k.replace(/-/g, '') + 'T' + hm.replace(':', '') + '00';
+function icsEvent({ title, date, time, dur, rrule, note }) {
+  const start = new Date(`${date}T${time}:00`);
+  const end = new Date(start.getTime() + (dur || 30) * 60000);
+  const endKey = dkey(end), endHM = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`;
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  return [
+    'BEGIN:VEVENT',
+    `UID:${uid()}-${Date.now()}@rostok`,
+    `DTSTAMP:${stamp}`,
+    `DTSTART:${icsDT(date, time)}`,
+    `DTEND:${icsDT(endKey, endHM)}`,
+    rrule ? `RRULE:${rrule}` : null,
+    `SUMMARY:${icsEsc(title)}`,
+    note ? `DESCRIPTION:${icsEsc(note)}` : null,
+    'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(title)}`, 'TRIGGER:-PT0M', 'END:VALARM',
+    'END:VEVENT',
+  ].filter(Boolean).join('\r\n');
+}
+function openIcs(events, filename) {
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Rostok//RU', 'CALSCALE:GREGORIAN', ...events, 'END:VCALENDAR'].join('\r\n');
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (isIOS) {
+    // Safari на iPhone открывает окно «Добавить в Календарь»
+    location.href = 'data:text/calendar;charset=utf-8,' + encodeURIComponent(ics);
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
+    a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+}
+const taskTitle = t => { const a = actById(t.aid); return a && !t.text.includes(a.emoji) ? `${a.emoji} ${t.text}` : t.text; };
 
 // ---------- тосты и модалки ----------
 function toast(text) {
@@ -210,556 +220,477 @@ function toast(text) {
   box.appendChild(el);
   setTimeout(() => el.remove(), 2600);
 }
-let modalCleanup = null;
 function openModal(html, onMount) {
-  closeModal();
   $('#sheet').innerHTML = html;
   $('#modal').classList.remove('hidden');
-  if (onMount) modalCleanup = onMount($('#sheet')) || null;
+  $('#sheet').scrollTop = 0;
+  if (onMount) onMount($('#sheet'));
 }
-function closeModal() {
-  if (modalCleanup) { modalCleanup(); modalCleanup = null; }
-  $('#modal').classList.add('hidden');
-}
+const closeModal = () => $('#modal').classList.add('hidden');
 $('#modal').addEventListener('click', e => {
   if (e.target.id === 'modal' || e.target.closest('[data-close]')) closeModal();
 });
 
-// ---------- навигация ----------
+// ---------- навигация и отрисовка ----------
 $$('.tabs button').forEach(b => b.addEventListener('click', () => { state.tab = b.dataset.tab; save(); render(); window.scrollTo(0, 0); }));
-$('#sos').addEventListener('click', openSOS);
-
 function render() {
   $$('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === state.tab));
-  const views = { today: viewToday, focus: viewFocus, hero: viewHero, shop: viewShop };
-  $('#screen').innerHTML = (views[state.tab] || viewToday)();
+  const views = { plan: viewPlan, acts: viewActs, wins: viewWins, more: viewMore };
+  $('#screen').innerHTML = (views[state.tab] || viewPlan)();
+  renderTimer();
 }
+function commit(msg) { save(); render(); if (msg) toast(msg); }
 
-// ---------- экран «Сегодня» ----------
+// ---------- экран «План» ----------
 function greeting() {
-  const h = new Date().getHours();
-  const name = state.name ? `, ${esc(state.name)}` : '';
+  const h = new Date().getHours(), name = state.name ? `, ${esc(state.name)}` : '';
   if (h < 6) return `Доброй ночи${name}`;
   if (h < 12) return `Доброе утро${name}`;
   if (h < 18) return `Добрый день${name}`;
   return `Добрый вечер${name}`;
 }
-function header() {
-  const t = totals(), lv = levelInfo(t.xp), s = streak();
-  return `
-  <div class="top">
-    <div>
-      <h1>${greeting()}</h1>
-      <div class="muted">${new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
-    </div>
-    <div class="badges">
-      <span class="badge" title="Серия дней">🔥 ${s}</span>
-      <span class="badge" title="Монетки">🪙 ${t.coins}</span>
-    </div>
-  </div>
-  <div class="card soft" style="margin-top:12px">
-    <div class="row between small"><span>${PLANTS[Math.min(lv.L - 1, PLANTS.length - 1)]} Уровень ${lv.L} · ${TITLES[Math.min(lv.L - 1, TITLES.length - 1)]}</span><span class="muted">${lv.cur}/${lv.need} XP</span></div>
-    <div class="bar" style="margin-top:6px"><i style="width:${(lv.cur / lv.need) * 100}%"></i></div>
+function visibleTasks(q) {
+  const t = today();
+  return state.tasks
+    .filter(x => x.q === q && ((x.done && x.doneDate === t) || (!x.done && (!x.date || x.date <= t))))
+    .sort((a, b) => (a.done - b.done) || (a.time || '99').localeCompare(b.time || '99'));
+}
+function taskHtml(t) {
+  const meta = [t.time, t.dur ? fmtMin(t.dur) : null, (!t.done && t.date && t.date < today()) ? 'перенесено' : null].filter(Boolean).join(' · ');
+  return `<div class="task ${t.done ? 'done' : ''}">
+    <button class="chk" data-toggle="${t.id}" aria-label="Готово">${t.done ? '✓' : ''}</button>
+    <span class="t" data-task="${t.id}">${esc(taskTitle(t))}${meta ? `<span class="meta">${esc(meta)}</span>` : ''}</span>
   </div>`;
 }
-function weekDots(hid) {
-  let s = '';
-  for (let i = 6; i >= 0; i--) {
-    const v = peek(dkey(addDays(new Date(), -i)))?.done?.[hid];
-    s += `<i class="${v === 'full' ? 'f' : v === 'mini' ? 'm' : ''}"></i>`;
-  }
-  return `<div class="dots" title="Последние 7 дней">${s}</div>`;
-}
-function viewToday() {
-  const d = peek(today()) || {};
-  const energy = d.energy;
-  const doneCount = Object.keys(d.done || {}).length;
-  let html = header();
+function viewPlan() {
+  const tasksToday = state.tasks.filter(t => t.doneDate === today()).length;
+  const instaToday = state.insta.filter(i => dkey(new Date(i.at)) === today() && i.choice !== 'scroll').length;
+  const timed = state.tasks.filter(t => !t.done && t.time && (t.date || today()) <= today());
+  let html = `
+  <h1>${greeting()}</h1>
+  <div class="muted">${new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+    ${tasksToday ? ` · сделано ${tasksToday}` : ''}${instaToday ? ` · ${instaToday}× выбрала не ленту` : ''}</div>
 
-  if (!energy) {
-    html += `
-    <div class="card banner">
-      <h3>Как твой заряд сегодня?</h3>
-      <p class="muted">От этого зависит, сколько стоит от себя ждать. Честный ответ — лучший.</p>
-      <div class="pills" style="margin-top:10px">
-        ${Object.entries(ENERGY).map(([k, v]) => `<button class="pill" data-energy="${k}">${v.label}</button>`).join('')}
-      </div>
-    </div>`;
-  } else {
-    html += `
-    <div class="card banner ${energy === 'low' ? 'low' : ''}">
-      <div class="row between"><b>${ENERGY[energy].label}</b><button class="iconbtn small" data-energy-reset>изменить</button></div>
-      <p class="muted">${ENERGY[energy].text}</p>
-    </div>`;
+  <h2>Подсказки на сегодня</h2>`;
+  for (const n of nudges()) {
+    html += `<div class="card nudge ${n.cls || ''}"><div class="e">${n.e}</div><div>${n.html}
+      ${n.aid ? `<div class="acts">
+        <button class="btn primary" data-start="${n.aid}">▶ Начать</button>
+        ${n.plan ? `<button class="btn" data-plan-act="${n.aid}">🗓️ Запланировать</button>` : ''}
+      </div>` : ''}</div></div>`;
   }
 
-  html += `<h2>Квесты дня ${doneCount ? `<span class="muted small">· сделано ${doneCount}</span>` : ''}</h2>`;
-  for (const h of activeHabits()) {
-    const v = d.done?.[h.id];
-    const low = energy === 'low';
-    html += `
-    <div class="card habit ${v ? 'done-' + v : ''}">
-      <div class="emo">${esc(h.emoji)}</div>
-      <div class="grow">
-        <div class="row"><b>${esc(h.name)}</b><span class="stat-chip">${STATS[h.stat]?.emoji || ''} ${STATS[h.stat]?.name || ''}</span></div>
-        ${weekDots(h.id)}
-      </div>
-      <button class="iconbtn" data-edit-habit="${h.id}" aria-label="Изменить">✏️</button>
-      <div class="habit-actions">
-        <button class="choice ${v === 'mini' ? 'on' : ''}" data-do="${h.id}" data-lvl="mini"><b>Мини · +${habitXP('mini', low)} XP</b>${esc(h.mini)}</button>
-        <button class="choice ${v === 'full' ? 'on' : ''}" data-do="${h.id}" data-lvl="full"><b>Полностью · +${habitXP('full', low)} XP</b>${esc(h.full)}</button>
-      </div>
-    </div>`;
+  html += `<h2>Матрица дня</h2><div class="matrix">`;
+  for (const q of [1, 3, 2, 4]) {
+    const ts = visibleTasks(q);
+    html += `<div class="quad q${q}"><h4>${QUADS[q].name}</h4><div class="sub">${QUADS[q].sub}</div>
+      ${ts.map(taskHtml).join('') || (q === 2 ? '<div class="muted small">Пусто. Добавь сюда хотя бы одно дело для себя.</div>' : '')}
+      <button class="add" data-add-task="${q}">＋ добавить</button></div>`;
   }
-  html += `<button class="btn ghost block" data-add-habit>＋ Добавить привычку</button>`;
-
-  html += `
-  <h2>Отдых — тоже квест</h2>
-  <div class="card">
-    <p class="muted">Если сил нет совсем — это не провал. Отдохни <i>осознанно</i>: без чувства вины, лучше без ленты. Серия не прервётся.</p>
-    <button class="btn ${d.rest ? 'primary' : ''} block" data-rest>${d.rest ? '🌿 Сегодня я отдыхаю — засчитано' : '🛌 Сегодня день отдыха'}</button>
-  </div>
-
-  <h2>Маленькие победы</h2>
-  <div class="card">
-    <p class="muted">Помыла посуду? Ответила на сообщение? Вышла на улицу? Это считается. Запиши — мозгу важно видеть, что ты делаешь.</p>
-    <form class="row" id="winForm" style="margin-top:8px">
-      <input id="winInput" placeholder="Например: поела нормальную еду" maxlength="120" autocomplete="off">
-      <button class="btn primary" type="submit">＋</button>
-    </form>
-    ${d.wins?.length ? `<ul class="wins">${d.wins.map((w, i) => `<li>${esc(w)} <button class="iconbtn small" data-del-win="${i}">✕</button></li>`).join('')}</ul>` : ''}
-  </div>`;
+  html += `</div>`;
+  html += `<button class="btn ${timed.length ? 'primary' : ''} block" style="margin-top:12px" data-cal-day ${timed.length ? '' : 'disabled'}>
+    📅 Отправить дела со временем в Календарь${timed.length ? ` (${timed.length})` : ''}</button>
+    <p class="muted small center">Календарь сам напомнит тебе в нужное время — даже если ты в Instagram.</p>`;
   return html;
 }
 
-// ---------- экран «Без телефона» ----------
-function viewFocus() {
-  const a = aggregates();
-  const d = peek(today()) || {};
-  const todayMin = (d.focus || []).reduce((s, f) => s + (f.ok ? f.min : f.done), 0);
-  const opts = activeHabits().map(h => `<option value="${h.id}">${esc(h.emoji)} ${esc(h.name)}</option>`).join('');
-  return `
-  <h1>Время без телефона</h1>
-  <p class="muted">Телефон — не враг, просто его создавали так, чтобы оторваться было трудно. Тренируем это понемногу, как мышцу.</p>
+// ---------- экран «Занятия» ----------
+function viewActs() {
+  const stats = liveActs().map(a => ({ a, s: actStats(a.id) }));
+  const ranked = stats.filter(x => x.s.moodN >= 1).sort((x, y) => (y.s.mood - x.s.mood) || (y.s.total - x.s.total));
+  const byTime = stats.filter(x => x.s.total > 0).sort((x, y) => y.s.total - x.s.total);
+  let html = `<h1>Занятия</h1><p class="muted">Сколько времени ты уже вложила и что тебе помогает больше всего.</p>`;
 
-  <div class="card">
-    <h3>📵 Квест «Тишина»</h3>
-    <p class="muted small">Нажми «Начать», положи телефон экраном вниз и займись чем-нибудь. Экран будет тёмным и не погаснет. Если выйдешь из приложения раньше — квест прервётся, но прожитые минуты всё равно засчитаются.</p>
-    <label>Сколько минут?</label>
-    <div class="pills">${FOCUS_PRESETS.map(m => `<button class="pill ${state.lastFocus === m ? 'on' : ''}" data-fmin="${m}">${m}</button>`).join('')}</div>
-    <label>Чем займёшься? (необязательно)</label>
-    <select id="focusWhat"><option value="">🫖 Просто побуду без телефона</option>${opts}</select>
-    <button class="btn primary block" data-focus-start>Начать на ${state.lastFocus} мин · +${state.lastFocus * 3} XP</button>
-  </div>
-
-  <div class="card">
-    <h3>🚪 Квест «Дверь»</h3>
-    <p class="muted small">Душ, туалет, готовка, прогулка до магазина — телефон остаётся за дверью. Нажми перед уходом, вернись и отметь.</p>
-    ${state.door
-      ? `<p>Телефон отдыхает с ${new Date(state.door.start).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}.</p>
-         <button class="btn primary block" data-door-back>Я вернулась ✨</button>
-         <button class="btn ghost block" data-door-cancel>Отменить</button>`
-      : `<button class="btn warm block" data-door-go>Оставляю телефон и ухожу · +10 XP</button>`}
-  </div>
-
-  <div class="card soft">
-    <div class="row between"><span>Сегодня без телефона</span><b>${todayMin} мин</b></div>
-    <div class="row between"><span>Рекорд квеста</span><b>${a.focusBest} мин</b></div>
-    <div class="row between"><span>Всего</span><b>${a.focusTotal} мин</b></div>
-    <div class="row between"><span>Раз за дверью</span><b>${a.doors}</b></div>
-  </div>
-
-  <h2>Если рука сама тянется</h2>
-  <div class="card">
-    <ul class="wins muted small">
-      <li>Начни с 2 минут. Серьёзно. Цель — не 15 минут, а опыт «я смогла».</li>
-      <li>Поставь лимит в «Экранном времени» (iPhone) или «Цифровом благополучии» (Android) — и на приложения, и на сайты instagram.com и youtube.com в браузере.</li>
-      <li>Убери соцсети с первого экрана, а на их место поставь Росток.</li>
-      <li>Включи чёрно-белый режим экрана — лента сразу становится скучнее.</li>
-      <li>Заряжай телефон не у кровати, а в другой комнате.</li>
-    </ul>
-  </div>`;
-}
-
-let focus = null; // {min, what, start, end, timer, wake}
-async function startFocus() {
-  const min = state.lastFocus;
-  const what = $('#focusWhat')?.value || '';
-  focus = { min, what, start: Date.now(), end: Date.now() + min * 60000, timer: null, wake: null };
-  try { focus.wake = await navigator.wakeLock?.request('screen'); } catch (e) { /* не поддерживается */ }
-  const h = habitById(what);
-  const ov = $('#focusOverlay');
-  ov.innerHTML = `
-    <div class="small">${h ? `${esc(h.emoji)} ${esc(h.name)}` : '🫖 Просто без телефона'}</div>
-    <svg class="ring" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="none" stroke="#222" stroke-width="3"/>
-      <circle id="ringArc" cx="50" cy="50" r="45" fill="none" stroke="#6f9b67" stroke-width="3" stroke-linecap="round"
-        stroke-dasharray="283" stroke-dashoffset="0" transform="rotate(-90 50 50)"/></svg>
-    <div class="time" id="focusTime">${min}:00</div>
-    <p>Положи телефон экраном вниз.<br>Он будет здесь, когда ты вернёшься.</p>
-    <button class="btn ghost" style="margin-top:30px;color:#8a8698;border-color:#333" id="focusStop">Закончить раньше</button>`;
-  ov.classList.remove('hidden');
-  $('#focusStop').onclick = () => endFocus(false);
-  tickFocus();
-  focus.timer = setInterval(tickFocus, 500);
-}
-function tickFocus() {
-  if (!focus) return;
-  const left = Math.max(0, focus.end - Date.now());
-  const s = Math.ceil(left / 1000);
-  $('#focusTime').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-  $('#ringArc')?.setAttribute('stroke-dashoffset', String(283 * (1 - left / (focus.min * 60000))));
-  if (left <= 0) endFocus(true);
-}
-function endFocus(ok, interrupted = false) {
-  if (!focus) return;
-  clearInterval(focus.timer);
-  try { focus.wake?.release(); } catch (e) { /* ничего */ }
-  const doneMin = Math.min(focus.min, Math.floor((Date.now() - focus.start) / 60000));
-  const f = focus; focus = null;
-  $('#focusOverlay').classList.add('hidden');
-  day().focus.push({ min: f.min, done: ok ? f.min : doneMin, ok, what: f.what, at: Date.now() });
-  if (ok) {
-    navigator.vibrate?.([200, 100, 200]);
-    commit(`+${f.min * 3} XP · +${f.min} 🪙`);
-    const h = habitById(f.what);
-    openModal(`
-      <div class="big-emoji">🕊️</div>
-      <h2 class="center">${f.min} ${plural(f.min, 'минута', 'минуты', 'минут')} без телефона!</h2>
-      <p class="center muted">Ты это сделала. Запомни это ощущение.</p>
-      ${h && !day().done[h.id] ? `<button class="btn primary block" data-do-close="${h.id}" data-lvl="full">Отметить «${esc(h.name)}» выполненной</button>` : ''}
-      <button class="btn block" data-close>Дальше</button>`);
+  html += `<h2>Что помогает тебе больше всего</h2><div class="card">`;
+  if (ranked.length) {
+    html += ranked.map((x, i) => `<div class="rank"><span class="n">${i + 1}</span><span style="font-size:22px">${x.a.emoji}</span>
+      <span>${esc(x.a.name)}<div class="muted small">после занятия обычно: ${moodFace(x.s.mood)} · ${x.s.moodN} ${plural(x.s.moodN, 'оценка', 'оценки', 'оценок')}</div></span>
+      <span class="muted small">${fmtMin(x.s.total)}</span></div>`).join('');
+    html += `<p class="muted small" style="margin-top:6px">Рейтинг строится из твоих ответов «как ты после занятия». Когда плохо — выбирай что-то из верхних строк.</p>`;
   } else {
-    commit(doneMin ? `+${doneMin} XP за ${doneMin} мин` : null);
-    openModal(`
-      <div class="big-emoji">🌱</div>
-      <h2 class="center">${interrupted ? 'Квест прервался' : 'Закончила раньше'}</h2>
-      <p class="center">${doneMin ? `Ты продержалась <b>${doneMin} ${plural(doneMin, 'минуту', 'минуты', 'минут')}</b> — и они засчитаны.` : 'Ничего страшного.'}</p>
-      <p class="center muted">Это не провал, а информация. Может, в следующий раз попробовать чуть короче?</p>
-      <button class="btn primary block" data-close>Хорошо</button>`);
+    html += `<p class="muted">После каждого занятия я спрошу, как ты себя чувствуешь. Через несколько раз здесь появится рейтинг того, что помогает именно тебе.</p>`;
   }
-}
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    if (focus) endFocus(false, true);
-  } else {
-    if (state.scroll) returnFromScroll();
-  }
-});
+  html += `</div>`;
 
-// ---------- SOS: тянет залипнуть ----------
-function openSOS() {
-  openModal(`
-    <h2>Тянет в ленту? Это нормально.</h2>
-    <p class="muted">Уставший мозг ищет быстрый дофамин — это не слабость характера. Давай выберем, что сделать с этим желанием:</p>
-    <button class="option" data-sos="wave"><span class="e">🌊</span><span><b>Переждать волну · 90 секунд</b><span class="muted small">Желание растёт и спадает, как волна. Просто подыши.</span></span></button>
-    <button class="option" data-sos="mini"><span class="e">🎲</span><span><b>Одно мини-дело вместо</b><span class="muted small">Самое крошечное. Потом можешь вернуться к ленте, если захочешь.</span></span></button>
-    <button class="option" data-sos="door"><span class="e">🚪</span><span><b>Оставить телефон и выйти из комнаты</b><span class="muted small">Попить воды, умыться, выглянуть в окно.</span></span></button>
-    <button class="option" data-sos="scroll"><span class="e">⏱️</span><span><b>Посмотреть осознанно, 10 минут</b><span class="muted small">Можно! Но с таймером. Вернёшься — получишь опыт за возвращение.</span></span></button>
-    <button class="btn ghost block" data-close style="margin-top:14px">Закрыть</button>`);
-}
-function sosWave() {
-  let left = 90;
-  openModal(`
-    <h2 class="center">Переждать волну</h2>
-    <div class="breath"></div>
-    <p class="center" id="breathText">Вдох… 4 секунды</p>
-    <p class="center muted" id="breathLeft">90 с</p>
-    <p class="center muted small">Заметь желание. Где оно в теле? Не надо с ним бороться — просто наблюдай, как оно меняется.</p>
-    <button class="btn ghost block" data-close>Остановить</button>`, () => {
-    const t0 = Date.now();
-    const iv = setInterval(() => {
-      const el = (Date.now() - t0) / 1000;
-      left = Math.max(0, 90 - Math.floor(el));
-      const phase = el % 10;
-      const bt = $('#breathText'), bl = $('#breathLeft');
-      if (bt) bt.textContent = phase < 4 ? 'Вдох… 4 секунды' : 'Выдох… 6 секунд';
-      if (bl) bl.textContent = `${left} с`;
-      if (left <= 0) {
-        clearInterval(iv);
-        day().waves++;
-        commit('🌊 Волна пережита · +15 XP');
-        openModal(`
-          <div class="big-emoji">🏄‍♀️</div>
-          <h2 class="center">Волна прошла</h2>
-          <p class="center muted">Как ты сейчас? Желание стало меньше? Даже если нет — ты дала себе выбор, а это главное.</p>
-          <button class="btn primary block" data-sos="mini">Сделать мини-дело</button>
-          <button class="btn block" data-close>Готово</button>`);
-      }
-    }, 250);
-    return () => clearInterval(iv);
-  });
-}
-function sosMini() {
-  const d = peek(today()) || {};
-  const free = activeHabits().filter(h => !d.done?.[h.id]);
-  if (!free.length) {
-    openModal(`<div class="big-emoji">🌟</div><h2 class="center">Все дела на сегодня уже отмечены!</h2>
-      <p class="center muted">Ты можешь просто отдохнуть. Попробуй переждать волну или выйти на пару минут.</p>
-      <button class="btn primary block" data-sos="wave">Переждать волну</button>`);
-    return;
+  if (byTime.length) {
+    const sum = byTime.reduce((s, x) => s + x.s.total, 0);
+    html += `<div class="card soft"><div class="row between"><b>Всего вложено в себя</b><b>${fmtMin(sum)}</b></div>
+      ${byTime.slice(0, 4).map(x => `<div class="row between small"><span>${x.a.emoji} ${esc(x.a.name)}</span><span>${fmtMin(x.s.total)}</span></div>`).join('')}</div>`;
   }
-  const h = pick(free);
-  openModal(`
-    <div class="big-emoji">${esc(h.emoji)}</div>
-    <h2 class="center">${esc(h.name)}</h2>
-    <p class="center" style="font-size:20px"><b>${esc(h.mini)}</b></p>
-    <p class="center muted">Только это. Не больше. Можно прямо сейчас.</p>
-    <button class="btn primary block" data-do-close="${h.id}" data-lvl="mini">Сделала! ✨</button>
-    <button class="btn block" data-sos="mini">🎲 Другое дело</button>
-    <button class="btn ghost block" data-close>Не сейчас</button>`);
-}
-function sosScroll() {
-  state.scroll = { start: Date.now() };
-  save();
-  openModal(`
-    <div class="big-emoji">⏱️</div>
-    <h2 class="center">Хорошо, 10 минут</h2>
-    <p class="muted">1. Поставь таймер на 10 минут в часах телефона.<br>2. Смотри без вины — ты выбрала это сама.<br>3. Когда таймер прозвонит, открой Росток — тут ждёт +5 XP за возвращение.</p>
-    <button class="btn primary block" data-close>Поняла</button>
-    <button class="btn ghost block" data-scroll-cancel>Передумала 💚</button>`);
-}
-function returnFromScroll() {
-  const min = Math.round((Date.now() - state.scroll.start) / 60000);
-  if (min < 1) return; // ещё не уходила
-  state.scroll = null;
-  day().scrolls++;
-  commit('🧭 С возвращением · +5 XP');
-  openModal(`
-    <div class="big-emoji">🧭</div>
-    <h2 class="center">С возвращением!</h2>
-    <p class="center">Тебя не было ${min} ${plural(min, 'минуту', 'минуты', 'минут')}.</p>
-    <p class="center muted">Без оценок. Как ты себя чувствуешь? Если голова тяжёлая — выпей воды и посмотри в окно пару минут.</p>
-    <button class="btn primary block" data-sos="mini">Мини-дело</button>
-    <button class="btn block" data-sos="wave">Подышать 90 секунд</button>
-    <button class="btn ghost block" data-close>Просто закрыть</button>`);
+
+  for (const cat of Object.keys(CATS)) {
+    const list = stats.filter(x => x.a.cat === cat);
+    if (!list.length) continue;
+    html += `<h2>${CATS[cat].name} <span class="muted small">· ${CATS[cat].hint}</span></h2>`;
+    for (const { a, s } of list) {
+      const sinceTxt = s.since === null ? 'ещё не было' : s.since === 0 ? 'сегодня' : s.since === 1 ? 'вчера' : `${days(s.since)} назад`;
+      const warn = s.since !== null && s.since >= 5;
+      html += `<div class="card act">
+        <div class="emo">${a.emoji}</div>
+        <div><b>${esc(a.name)}</b>
+          <div class="nums">Всего ${fmtMin(s.total)} · неделя ${fmtMin(s.week)}${s.streak > 1 ? ` · 🔥 ${s.streak} ${plural(s.streak, 'день', 'дня', 'дней')} подряд` : ''}</div>
+          <div class="nums ${warn ? 'warn' : ''}">Последний раз: ${sinceTxt}</div></div>
+        <button class="iconbtn" data-edit-act="${a.id}" aria-label="Настроить">✏️</button>
+        <div class="btns">
+          <button class="btn primary" data-start="${a.id}">▶ Таймер</button>
+          <button class="btn" data-log="${a.id}">＋ Уже сделала</button>
+        </div></div>`;
+    }
+  }
+  html += `<button class="btn ghost block" data-add-act>＋ Новое занятие</button>`;
+  return html;
 }
 
-// ---------- экран «Росток» ----------
-function viewHero() {
-  const t = totals(), lv = levelInfo(t.xp), a = aggregates();
-  const idx = Math.min(lv.L - 1, PLANTS.length - 1);
-  let heat = '';
-  const start = addDays(new Date(), -27);
-  for (let i = 0; i < 28; i++) {
-    const k = dkey(addDays(start, i)), d = peek(k), x = dayXP(d);
-    const cls = !x ? '' : (d.rest && x <= 25) ? 'rest' : x < 20 ? 'l1' : x < 50 ? 'l2' : x < 90 ? 'l3' : 'l4';
-    heat += `<i class="${cls} ${k === today() ? 'today' : ''}" title="${k}: ${x} XP"></i>`;
+// ---------- экран «Победы» ----------
+function viewWins() {
+  const wins = allWins();
+  const t = today();
+  const memories = [7, 14, 30, 90, 365].map(n => {
+    const k = dkey(addDays(new Date(), -n));
+    const w = wins.filter(x => x.date === k);
+    const ss = state.sessions.filter(s => s.date === k);
+    return { n, k, w, min: ss.reduce((a, s) => a + s.min, 0) };
+  }).filter(m => m.w.length || m.min);
+  const week = state.sessions.filter(s => s.date >= dkey(addDays(new Date(), -6)));
+  let html = `<h1>Маленькие победы</h1>
+  <p class="muted">Ответила на письмо, вышла на улицу, поела нормально — это считается. Мозг при выгорании забывает хорошее, поэтому записываем.</p>
+  <form class="row" id="winForm" style="margin:12px 0">
+    <input id="winInput" placeholder="Что получилось сегодня?" maxlength="160" autocomplete="off">
+    <button class="btn primary" type="submit">＋</button>
+  </form>
+  <div class="card soft"><div class="row between"><span>За 7 дней занятий</span><b>${week.length}, ${fmtMin(week.reduce((a, s) => a + s.min, 0))}</b></div>
+  <div class="row between"><span>Всего побед записано</span><b>${wins.length}</b></div></div>`;
+  if (memories.length) {
+    html += `<h2>В этот день раньше</h2>`;
+    for (const m of memories) {
+      const label = m.n === 7 ? 'Неделю назад' : m.n === 14 ? 'Две недели назад' : m.n === 30 ? 'Месяц назад' : m.n === 90 ? 'Три месяца назад' : 'Год назад';
+      html += `<div class="card memory"><b>${label}</b> <span class="muted small">${fmtDate(m.k)}</span>
+        ${m.min ? `<div class="small">Занималась собой ${fmtMin(m.min)}</div>` : ''}
+        ${m.w.map(w => `<div>• ${esc(w.text)}</div>`).join('')}</div>`;
+    }
   }
-  return `
-  <div class="card center" style="padding-top:20px">
-    <div class="plant">${PLANTS[idx]}</div>
-    <h1>${state.name ? esc(state.name) + ' · ' : ''}Уровень ${lv.L}</h1>
-    <div class="muted">${TITLES[Math.min(lv.L - 1, TITLES.length - 1)]}</div>
-    <div class="bar" style="margin:12px 0 4px"><i style="width:${(lv.cur / lv.need) * 100}%"></i></div>
-    <div class="muted small">${lv.cur} / ${lv.need} XP до следующего уровня · всего ${t.xp} XP</div>
-    <div class="row" style="justify-content:center;margin-top:10px;gap:16px">
-      <span>🔥 серия ${streak()}</span><span>🏅 рекорд ${a.streakBest}</span><span>🪙 ${t.coins}</span>
-    </div>
-  </div>
+  html += `<h2>Все победы</h2>`;
+  if (!wins.length) html += `<p class="muted">Пока пусто. Начни с самой маленькой.</p>`;
+  let cur = '';
+  for (const w of wins.slice(0, 200)) {
+    if (w.date !== cur) { cur = w.date; html += `<div class="muted small" style="margin:12px 0 4px">${w.date === t ? 'Сегодня' : fmtDate(w.date)}</div>`; }
+    html += `<div class="card" style="padding:10px 14px;margin-bottom:6px"><div class="row between"><span>${esc(w.text)}</span>
+      ${w.auto ? '' : `<button class="iconbtn small" data-del-win="${w.id}" aria-label="Удалить">✕</button>`}</div></div>`;
+  }
+  return html;
+}
 
-  <h2>Характеристики</h2>
-  <div class="card stats-grid">
-    ${Object.entries(STATS).map(([k, s]) => {
-      const x = t.stats[k] || 0, l = Math.floor(x / 100) + 1;
-      return `<div class="stat-row"><span>${s.emoji}</span><div><div class="small">${s.name}</div><div class="bar"><i style="width:${x % 100}%"></i></div></div><span class="small muted">ур. ${l}</span></div>`;
-    }).join('')}
-  </div>
+// ---------- экран «Ещё» ----------
+function siteUrl() { return location.href.split('?')[0].split('#')[0]; }
+function viewMore() {
+  const url = siteUrl() + '?from=insta';
+  return `<h1>Настройки и помощь</h1>
 
-  <h2>Последние 4 недели</h2>
+  <h2>📵 Когда открываешь Instagram</h2>
   <div class="card">
-    <div class="heat">${heat}</div>
-    <p class="muted small" style="margin-top:8px">Пустые клетки — не провал. Цель — чтобы зелёных постепенно стало чуть больше, а не чтобы всё было идеально.</p>
+    <p>Ты права: в ленте про Росток не вспомнишь. Поэтому пусть iPhone сам остановит тебя на входе.</p>
+    <details style="margin-top:8px"><summary>Настроить автоматизацию (3 минуты)</summary>
+    <ol class="steps small">
+      <li>Открой приложение <b>Команды</b> (Shortcuts) → вкладка <b>Автоматизация</b> → <b>＋</b>.</li>
+      <li>Выбери <b>Приложение</b> → Instagram (и YouTube) → <b>Открыто</b> → <b>Выполнять сразу</b> → Далее.</li>
+      <li>Добавь действие <b>«Выбрать из меню»</b>. В заголовок напиши: <i>«Ты хотела жить свою жизнь. Что выберешь?»</i></li>
+      <li>Пункты меню: <b>«Открыть Росток»</b> и <b>«Мне правда нужно сюда»</b>.</li>
+      <li>Под «Открыть Росток» добавь действие <b>«Открыть URL»</b> с адресом:<br><code>${esc(url)}</code></li>
+      <li>Под «Мне правда нужно сюда» ничего не добавляй — ты просто останешься в Instagram.</li>
+    </ol>
+    <button class="btn block" data-copy="${esc(url)}">📋 Скопировать адрес</button>
+    <p class="muted small">По этому адресу Росток откроется сразу с предложением, чем заняться вместо ленты.</p>
+    </details>
   </div>
 
-  <h2>Достижения · ${state.seenAch.length}/${ACHIEVEMENTS.length}</h2>
-  <div class="ach">
-    ${ACHIEVEMENTS.map(x => `<div class="${state.seenAch.includes(x.id) ? '' : 'locked'}" title="${esc(x.hint)}"><span>${x.emoji}</span>${esc(x.name)}<div class="muted" style="font-size:10px">${esc(x.hint)}</div></div>`).join('')}
+  <h2>🌐 Instagram и YouTube в браузере</h2>
+  <div class="card">
+    <ol class="steps small">
+      <li><b>Настройки → Экранное время → Лимиты приложений → Добавить лимит</b>.</li>
+      <li>Внизу раздел <b>Веб-сайты</b>: добавь <code>instagram.com</code> и <code>youtube.com</code>.</li>
+      <li>Поставь, например, 20 минут в день. После лимита сайт закроется заставкой.</li>
+      <li>Чтобы не снимать лимит одним нажатием, задай <b>код-пароль Экранного времени</b> и попроси кого-нибудь его придумать.</li>
+    </ol>
   </div>
 
-  <h2>Настройки</h2>
+  <h2>📱 Как держать Росток под рукой</h2>
+  <div class="card small">
+    <p>В Safari: <b>Поделиться → На экран «Домой»</b>. Поставь иконку туда, где была Instagram.</p>
+    <p class="muted">Важно: если при добавлении есть переключатель <b>«Открывать как веб-приложение»</b>, выключи его. Тогда иконка и автоматизация из Команд откроют Росток в одном и том же Safari, и все данные будут в одном месте.</p>
+  </div>
+
+  <h2>Профиль и данные</h2>
   <div class="card">
     <label>Как к тебе обращаться?</label>
     <input id="nameInput" value="${esc(state.name)}" placeholder="Имя" maxlength="30">
     <button class="btn block" data-export>💾 Сохранить копию данных</button>
     <button class="btn block" data-import>📂 Загрузить копию</button>
-    <input type="file" id="importFile" accept="application/json" class="hidden">
-    <button class="btn block" data-about>ℹ️ Как это работает</button>
-    <button class="btn danger block" data-reset>Начать всё заново</button>
-    <p class="muted small" style="margin-top:10px">Все данные хранятся только на этом телефоне. Иногда сохраняй копию на всякий случай.</p>
-  </div>`;
+    <input type="file" id="importFile" accept="application/json,.json" class="hidden">
+    <button class="btn danger block" data-reset>Удалить все данные</button>
+    <p class="muted small" style="margin-top:10px">Всё хранится только на этом телефоне. Раз в неделю-две сохраняй копию в Файлы.</p>
+  </div>
+  <p class="muted small center" style="margin-top:20px">Если тяжесть и бессилие держатся неделями — сходи к психологу или врачу. Выгорание лечится, и просить помощи — нормально.</p>`;
 }
 
-// ---------- экран «Награды» ----------
-function viewShop() {
-  const t = totals();
-  const hist = state.purchases.slice(-8).reverse();
-  return `
-  <div class="top"><div><h1>Награды</h1><div class="muted">Трать монетки на приятное — без вины, ты их заработала.</div></div>
-    <span class="badge" style="font-size:18px">🪙 ${t.coins}</span></div>
-  <div style="margin-top:14px">
-  ${state.rewards.map(r => `
-    <div class="card reward">
-      <div class="emo">${esc(r.emoji)}</div>
-      <div><b>${esc(r.name)}</b><div class="muted small">🪙 ${r.cost}</div></div>
-      <div class="row" style="gap:4px">
-        <button class="iconbtn" data-edit-reward="${r.id}" aria-label="Изменить">✏️</button>
-        <button class="btn ${t.coins >= r.cost ? 'primary' : ''}" data-buy="${r.id}" ${t.coins >= r.cost ? '' : 'disabled'}>Взять</button>
-      </div>
-    </div>`).join('')}
-  </div>
-  <button class="btn ghost block" data-add-reward>＋ Своя награда</button>
-  <div class="card soft" style="margin-top:14px">
-    <p class="small muted"><b>Как копятся монетки:</b> мини-дело — 2 🪙, полное — 5 🪙, минута без телефона — 1 🪙, волна пережита — 3 🪙, телефон за дверью — 2 🪙, победа дня — 1 🪙.</p>
-  </div>
-  ${hist.length ? `<h2>Недавно</h2><div class="card">${hist.map(p => `<div class="row between small"><span>${esc(p.emoji)} ${esc(p.name)}</span><span class="muted">${new Date(p.at).toLocaleDateString('ru-RU')} · −${p.cost}</span></div>`).join('')}</div>` : ''}`;
+// ---------- таймер ----------
+let timerIv = null;
+function renderTimer() {
+  const bar = $('#timerBar');
+  clearInterval(timerIv);
+  if (!state.timer) { bar.classList.add('hidden'); return; }
+  const a = actById(state.timer.aid);
+  const upd = () => {
+    const sec = Math.floor((Date.now() - state.timer.start) / 1000);
+    const t = `${Math.floor(sec / 3600) ? Math.floor(sec / 3600) + ':' : ''}${String(Math.floor(sec / 60) % 60).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+    bar.innerHTML = `<span>${a ? a.emoji + ' ' + esc(a.name) : ''} · ${t}</span><button data-stop>Готово</button>`;
+  };
+  upd();
+  bar.classList.remove('hidden');
+  timerIv = setInterval(upd, 1000);
+}
+function startTimer(aid) {
+  if (state.timer) { toast('Таймер уже идёт — сначала заверши его'); return; }
+  state.timer = { aid, start: Date.now() };
+  closeModal();
+  commit('Таймер пошёл. Можно отложить телефон 🌿');
+}
+function stopTimer() {
+  const { aid, start } = state.timer;
+  const min = Math.max(1, Math.round((Date.now() - start) / 60000));
+  state.timer = null; save(); renderTimer();
+  logSession(aid, min);
+}
+function logSession(aid, min, taskId) {
+  const a = actById(aid);
+  let mood = null;
+  openModal(`
+    <div class="big-emoji">${a.emoji}</div>
+    <h2 class="center">${esc(a.name)}</h2>
+    <label>Сколько минут?</label>
+    <input id="logMin" type="number" min="1" max="600" value="${min || a.goal}">
+    <label>Как ты себя чувствуешь после?</label>
+    <div class="moods">${MOODS.map(m => `<button type="button" data-mood="${m.v}"><span>${m.e}</span>${m.t}</button>`).join('')}</div>
+    <label>Что получилось? (попадёт в победы)</label>
+    <input id="logNote" maxlength="160" placeholder="Например: довязала рукав">
+    <button class="btn primary block" id="logSave" style="margin-top:16px">Сохранить</button>
+    <button class="btn ghost block" data-close>Отмена</button>`, sheet => {
+    $$('[data-mood]', sheet).forEach(b => b.onclick = () => {
+      mood = +b.dataset.mood;
+      $$('[data-mood]', sheet).forEach(x => x.classList.toggle('on', x === b));
+    });
+    $('#logSave', sheet).onclick = () => {
+      const m = Math.max(1, parseInt($('#logMin').value, 10) || 1);
+      const note = $('#logNote').value.trim();
+      state.sessions.push({ id: uid(), aid, date: today(), min: m, mood, note, at: Date.now() });
+      if (taskId) { const t = state.tasks.find(x => x.id === taskId); if (t) { t.done = true; t.doneDate = today(); } }
+      closeModal();
+      const s = actStats(aid);
+      const passed = MILESTONES.find(x => s.total >= x && s.total - m < x);
+      commit(passed ? `🎉 ${a.name}: уже ${fmtMin(passed)}! Дальше — больше` : `+${fmtMin(m)} · всего ${fmtMin(s.total)}`);
+    };
+  });
 }
 
 // ---------- формы ----------
-function editHabit(id) {
-  const h = id ? habitById(id) : { emoji: '⭐', name: '', stat: 'mind', mini: '', full: '' };
+function editTask(id, q, preset = {}) {
+  const t = id ? state.tasks.find(x => x.id === id) : { text: '', q: +q || 2, date: today(), time: '', dur: '', aid: '', ...preset };
+  const tomorrow = dkey(addDays(new Date(), 1));
   openModal(`
-    <h2>${id ? 'Изменить привычку' : 'Новая привычка'}</h2>
-    <form id="habitForm">
-      <div class="row"><div style="width:70px"><label>Значок</label><input name="emoji" value="${esc(h.emoji)}" maxlength="4"></div>
-      <div class="grow"><label>Название</label><input name="name" value="${esc(h.name)}" required maxlength="40" placeholder="Например: Прогулка"></div></div>
-      <label>Характеристика</label>
-      <select name="stat">${Object.entries(STATS).map(([k, s]) => `<option value="${k}" ${h.stat === k ? 'selected' : ''}>${s.emoji} ${s.name}</option>`).join('')}</select>
-      <label>Мини-версия — настолько маленькая, что смешно не сделать</label>
-      <input name="mini" value="${esc(h.mini)}" required maxlength="50" placeholder="Например: выйти на крыльцо">
-      <label>Полная версия</label>
-      <input name="full" value="${esc(h.full)}" required maxlength="50" placeholder="Например: 30 минут пешком">
+    <h2>${id ? 'Дело' : 'Новое дело'}</h2>
+    <form id="taskForm">
+      <label>Что сделать?</label>
+      <input name="text" value="${esc(t.text)}" required maxlength="100" placeholder="Например: откликнуться на 2 вакансии">
+      <label>Квадрат</label>
+      <select name="q">${[1, 2, 3, 4].map(n => `<option value="${n}" ${t.q === n ? 'selected' : ''}>${QUADS[n].name}</option>`).join('')}</select>
+      <label>Связать с занятием (время засчитается)</label>
+      <select name="aid"><option value="">—</option>${liveActs().map(a => `<option value="${a.id}" ${t.aid === a.id ? 'selected' : ''}>${a.emoji} ${esc(a.name)}</option>`).join('')}</select>
+      <div class="row">
+        <div class="grow"><label>Когда</label><select name="date">
+          <option value="${today()}" ${!t.date || t.date <= today() ? 'selected' : ''}>Сегодня</option>
+          <option value="${tomorrow}" ${t.date === tomorrow ? 'selected' : ''}>Завтра</option></select></div>
+        <div class="grow"><label>Во сколько</label><input name="time" type="time" value="${esc(t.time || '')}"></div>
+        <div style="width:80px"><label>Минут</label><input name="dur" type="number" min="5" max="600" step="5" value="${t.dur || ''}"></div>
+      </div>
       <button class="btn primary block" type="submit" style="margin-top:16px">Сохранить</button>
-      ${id ? `<button class="btn danger block" type="button" data-del-habit="${id}">Убрать привычку</button>` : ''}
+      ${id && t.time ? `<button class="btn block" type="button" data-cal-task="${id}">📅 Добавить в Календарь</button>` : ''}
+      ${id ? `<button class="btn danger block" type="button" data-del-task="${id}">Удалить</button>` : ''}
       <button class="btn ghost block" type="button" data-close>Отмена</button>
     </form>`, sheet => {
-    $('#habitForm', sheet).onsubmit = e => {
+    const form = $('#taskForm', sheet);
+    form.aid.onchange = () => {
+      const a = actById(form.aid.value);
+      if (a && !form.text.value) form.text.value = a.name;
+      if (a && !form.dur.value) form.dur.value = a.goal;
+      if (a && a.cat !== 'job') form.q.value = '2';
+    };
+    form.onsubmit = e => {
       e.preventDefault();
-      const f = Object.fromEntries(new FormData(e.target));
-      if (id) Object.assign(h, f); else state.habits.push({ id: uid(), ...f });
-      closeModal(); commit(id ? 'Сохранено' : 'Новая привычка добавлена 🌱');
+      const f = Object.fromEntries(new FormData(form));
+      const data = { text: f.text.trim(), q: +f.q, aid: f.aid, date: f.date, time: f.time, dur: f.dur ? +f.dur : null };
+      if (id) Object.assign(t, data); else state.tasks.push({ id: uid(), done: false, doneDate: null, ...data });
+      closeModal();
+      commit(data.time ? 'Сохранено. Отправь в Календарь, чтобы пришло напоминание' : 'Сохранено');
     };
   });
 }
-function editReward(id) {
-  const r = id ? state.rewards.find(x => x.id === id) : { emoji: '🎀', name: '', cost: 30 };
+function editAct(id) {
+  const a = id ? actById(id) : { name: '', emoji: '⭐', cat: 'restore', goal: 20 };
+  const dayNames = [['MO', 'Пн'], ['TU', 'Вт'], ['WE', 'Ср'], ['TH', 'Чт'], ['FR', 'Пт'], ['SA', 'Сб'], ['SU', 'Вс']];
   openModal(`
-    <h2>${id ? 'Изменить награду' : 'Своя награда'}</h2>
-    <form id="rewardForm">
-      <div class="row"><div style="width:70px"><label>Значок</label><input name="emoji" value="${esc(r.emoji)}" maxlength="4"></div>
-      <div class="grow"><label>Что это?</label><input name="name" value="${esc(r.name)}" required maxlength="50" placeholder="Например: ванна с пеной"></div></div>
-      <label>Цена в монетках</label>
-      <input name="cost" type="number" min="1" max="9999" value="${r.cost}" required>
+    <h2>${id ? 'Настроить занятие' : 'Новое занятие'}</h2>
+    <form id="actForm">
+      <div class="row"><div style="width:70px"><label>Значок</label><input name="emoji" value="${esc(a.emoji)}" maxlength="4"></div>
+      <div class="grow"><label>Название</label><input name="name" value="${esc(a.name)}" required maxlength="40"></div></div>
+      <label>Тип</label>
+      <select name="cat">${Object.entries(CATS).map(([k, c]) => `<option value="${k}" ${a.cat === k ? 'selected' : ''}>${c.name} — ${c.hint}</option>`).join('')}</select>
+      <label>Обычно занимаюсь, минут</label>
+      <input name="goal" type="number" min="5" max="600" step="5" value="${a.goal}">
       <button class="btn primary block" type="submit" style="margin-top:16px">Сохранить</button>
-      ${id ? `<button class="btn danger block" type="button" data-del-reward="${id}">Удалить</button>` : ''}
-      <button class="btn ghost block" type="button" data-close>Отмена</button>
-    </form>`, sheet => {
-    $('#rewardForm', sheet).onsubmit = e => {
+    </form>
+    ${id ? `
+    <h2>🔁 Регулярное напоминание</h2>
+    <p class="muted small">Добавлю повторяющееся событие в Календарь iPhone — он будет напоминать сам.</p>
+    <div class="row"><div class="grow"><label>Время</label><input id="recTime" type="time" value="${a.cat === 'job' ? '11:00' : '19:00'}"></div></div>
+    <label>Дни</label>
+    <div class="pills" id="recDays">${dayNames.map(([k, n], i) => `<button type="button" class="pill ${a.cat === 'job' ? (i < 5 ? 'on' : '') : (i % 2 === 0 ? 'on' : '')}" data-rd="${k}">${n}</button>`).join('')}</div>
+    <button class="btn block" id="recAdd" style="margin-top:10px">📅 Добавить в Календарь</button>
+    <button class="btn danger block" data-del-act="${id}">Убрать занятие</button>` : ''}
+    <button class="btn ghost block" data-close>Закрыть</button>`, sheet => {
+    $('#actForm', sheet).onsubmit = e => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(e.target));
-      f.cost = Math.max(1, parseInt(f.cost, 10) || 1);
-      if (id) Object.assign(r, f); else state.rewards.push({ id: uid(), ...f });
+      f.goal = Math.max(5, parseInt(f.goal, 10) || 20);
+      if (id) Object.assign(a, f); else state.acts.push({ id: uid(), ...f });
       closeModal(); commit('Сохранено');
     };
+    $$('[data-rd]', sheet).forEach(b => b.onclick = () => b.classList.toggle('on'));
+    const rec = $('#recAdd', sheet);
+    if (rec) rec.onclick = () => {
+      const byday = $$('[data-rd].on', sheet).map(b => b.dataset.rd);
+      if (!byday.length) { toast('Выбери хотя бы один день'); return; }
+      const time = $('#recTime').value || '19:00';
+      openIcs([icsEvent({
+        title: `${a.emoji} ${a.name}`, date: today(), time, dur: a.goal,
+        rrule: `FREQ=WEEKLY;BYDAY=${byday.join(',')}`,
+        note: a.cat === 'job' ? 'Даже 20 минут сдвигают дело. Отметь в Ростке, когда закончишь.' : 'Это время для тебя. Отметь в Ростке, как себя чувствуешь после.',
+      })], `${a.name}.ics`);
+    };
   });
 }
-function showAbout(first) {
+function showWelcome() {
   openModal(`
     <div class="big-emoji">🌱</div>
-    <h2 class="center">${first ? 'Привет! Это Росток' : 'Как это работает'}</h2>
-    <p><b>Мини-версии засчитываются.</b> Одна страница книги — это чтение. Один ряд — это вязание. Маленькие шаги и есть путь.</p>
-    <p><b>Отдых — тоже квест.</b> При выгорании отдыхать — это не лень, а лечение. Отмечай день отдыха, и серия не сломается.</p>
-    <p><b>Телефон — твой помощник.</b> Когда рука тянется к ленте, жми оранжевую кнопку 🆘 — там есть варианты, и ни один тебя не ругает.</p>
-    <p><b>Квест «Тишина».</b> Начни с 2–5 минут без телефона. Это тренировка, как в спортзале.</p>
-    <p class="muted small">Если тяжесть, бессилие и вина не отпускают неделями — это повод поговорить с психологом или врачом. Выгорание правда лечится, и просить помощи — нормально.</p>
-    ${first ? `<label>Как к тебе обращаться? (необязательно)</label><input id="onbName" maxlength="30" placeholder="Имя">` : ''}
-    <button class="btn primary block" data-onb-done>${first ? 'Начнём потихоньку' : 'Понятно'}</button>`);
+    <h2 class="center">Росток</h2>
+    <p><b>План дня по Эйзенхауэру.</b> Поиск работы и хобби живут в квадрате «важно, но не срочно» — его обычно съедают все остальные. Здесь он в центре.</p>
+    <p><b>Подсказки каждый день:</b> найти время на поиск работы, прогуляться, вернуться к хобби, которое давно забросила. Плюс сколько времени ты уже вложила.</p>
+    <p><b>Напоминания — в твоём Календаре.</b> Дела со временем отправляются туда одной кнопкой, информация не разбросана.</p>
+    <p><b>Рейтинг занятий.</b> После занятия отмечаешь, как себя чувствуешь, — и видишь, что помогает именно тебе.</p>
+    <p class="muted small">Во вкладке «Ещё» есть инструкция: как сделать, чтобы iPhone предлагал Росток при открытии Instagram.</p>
+    <label>Как к тебе обращаться? (необязательно)</label><input id="onbName" maxlength="30" placeholder="Имя">
+    <button class="btn primary block" data-onb-done>Начать</button>`);
+}
+function showInsta() {
+  const job = liveActs().find(a => a.cat === 'job');
+  const jobS = job ? actStats(job.id) : null;
+  const restore = liveActs().filter(a => a.cat === 'restore').map(a => ({ a, s: actStats(a.id) }));
+  // что предложить: лучшее по самочувствию, иначе давно забытое
+  const best = [...restore].filter(x => x.s.mood).sort((x, y) => y.s.mood - x.s.mood)[0]
+    || [...restore].sort((x, y) => (y.s.since ?? 999) - (x.s.since ?? 999))[0];
+  const saidNo = state.insta.filter(i => i.choice !== 'scroll').length;
+  openModal(`
+    <div class="big-emoji">👀</div>
+    <h2 class="center">Ты собиралась в ленту</h2>
+    <p class="center muted">Это не плохо — мозг устал и ищет отдых. Но есть отдых, после которого не болит голова.</p>
+    ${best ? `<button class="option" data-insta="start" data-aid="${best.a.id}"><span class="e">${best.a.emoji}</span><span><b>${esc(best.a.name)} · ${fmtMin(Math.min(15, best.a.goal))}</b>
+      <span class="muted small">${best.s.mood ? `После этого тебе обычно ${moodFace(best.s.mood)}` : best.s.since ? `Не было уже ${days(best.s.since)}` : 'Попробуй — вдруг понравится'}</span></span></button>` : ''}
+    ${actById('walk') && !actById('walk').archived && best?.a.id !== 'walk' ? `<button class="option" data-insta="start" data-aid="walk"><span class="e">🚶‍♀️</span><span><b>Прогуляться 15 минут</b><span class="muted small">Свежий воздух лучше ленты снимает головную боль</span></span></button>` : ''}
+    ${job && jobS.todayMin < job.goal ? `<button class="option" data-insta="start" data-aid="${job.id}"><span class="e">${job.emoji}</span><span><b>${esc(job.name)} · 20 минут</b><span class="muted small">${jobS.todayMin ? `Сегодня уже ${fmtMin(jobS.todayMin)}` : 'Сегодня ещё не было'}</span></span></button>` : ''}
+    <button class="option" data-insta="plan"><span class="e">🗓️</span><span><b>Посмотреть план дня</b><span class="muted small">Что важного на сегодня</span></span></button>
+    <button class="btn ghost block" data-insta="scroll" style="margin-top:14px">Всё равно полистаю — поставлю таймер на 10 минут</button>
+    ${saidNo ? `<p class="center muted small">Ты уже ${saidNo} ${plural(saidNo, 'раз', 'раза', 'раз')} выбрала не ленту 💚</p>` : ''}`);
 }
 
 // ---------- обработка нажатий ----------
 document.addEventListener('click', e => {
-  const t = e.target.closest('button');
+  const t = e.target.closest('button, [data-task]');
   if (!t) return;
   const ds = t.dataset;
 
-  if (ds.energy) { day().energy = ds.energy; commit(ds.energy === 'low' ? 'Спасибо за честность 💚' : null); return; }
-  if ('energyReset' in ds) { day().energy = null; commit(); return; }
+  if (ds.toggle) {
+    const task = state.tasks.find(x => x.id === ds.toggle);
+    if (task.done) { task.done = false; task.doneDate = null; commit(); return; }
+    if (task.aid && actById(task.aid)) { logSession(task.aid, task.dur, task.id); return; }
+    task.done = true; task.doneDate = today(); commit('✓ Готово'); navigator.vibrate?.(20); return;
+  }
+  if (ds.task) return editTask(ds.task);
+  if (ds.addTask) return editTask(null, ds.addTask);
+  if (ds.delTask) { state.tasks = state.tasks.filter(x => x.id !== ds.delTask); closeModal(); commit('Удалено'); return; }
+  if (ds.calTask) {
+    const task = state.tasks.find(x => x.id === ds.calTask);
+    openIcs([icsEvent({ title: taskTitle(task), date: task.date && task.date > today() ? task.date : today(), time: task.time, dur: task.dur })], 'rostok.ics');
+    return;
+  }
+  if ('calDay' in ds) {
+    const timed = state.tasks.filter(x => !x.done && x.time && (x.date || today()) <= today());
+    openIcs(timed.map(x => icsEvent({ title: taskTitle(x), date: today(), time: x.time, dur: x.dur })), 'rostok-day.ics');
+    return;
+  }
+  if (ds.planAct) {
+    const a = actById(ds.planAct);
+    return editTask(null, a.cat === 'job' ? 2 : 2, { text: a.name, aid: a.id, dur: a.goal, time: a.cat === 'job' ? '11:00' : '19:00' });
+  }
+  if (ds.start) return startTimer(ds.start);
+  if ('stop' in ds) return stopTimer();
+  if (ds.log) return logSession(ds.log);
+  if (ds.editAct) return editAct(ds.editAct);
+  if ('addAct' in ds) return editAct(null);
+  if (ds.delAct) {
+    if (confirm('Убрать занятие? Вложенное время останется в истории.')) { actById(ds.delAct).archived = true; closeModal(); commit('Убрано'); }
+    return;
+  }
+  if (ds.delWin) { state.wins = state.wins.filter(w => w.id !== ds.delWin); commit(); return; }
 
-  if (ds.do || ds.doClose) {
-    const hid = ds.do || ds.doClose, lvl = ds.lvl, d = day();
-    if (d.done[hid] === lvl) { delete d.done[hid]; commit('Отметка снята'); }
-    else {
-      d.done[hid] = lvl;
-      commit(`+${habitXP(lvl, d.energy === 'low')} XP · +${lvl === 'full' ? 5 : 2} 🪙`);
-      navigator.vibrate?.(30);
+  if (ds.insta) {
+    state.insta.push({ at: Date.now(), choice: ds.insta });
+    if (ds.insta === 'start') return startTimer(ds.aid);
+    if (ds.insta === 'plan') { state.tab = 'plan'; closeModal(); commit('Отличный выбор 💚'); return; }
+    if (ds.insta === 'scroll') {
+      save();
+      openModal(`<div class="big-emoji">⏱️</div><h2 class="center">Хорошо, без вины</h2>
+        <p class="center">Скажи Siri: <b>«Таймер на 10 минут»</b> — и листай спокойно.</p>
+        <p class="center muted">Когда прозвенит, вспомни: голова потом болит не от отдыха, а от бесконечной ленты.</p>
+        <button class="btn primary block" data-close>Поняла</button>`);
     }
-    if (ds.doClose) closeModal();
     return;
   }
-  if (ds.editHabit) return editHabit(ds.editHabit);
-  if ('addHabit' in ds) return editHabit(null);
-  if (ds.delHabit) {
-    if (confirm('Убрать эту привычку? История и опыт сохранятся.')) { habitById(ds.delHabit).archived = true; closeModal(); commit('Привычка убрана'); }
+  if (ds.copy) {
+    navigator.clipboard?.writeText(ds.copy).then(() => toast('Скопировано'), () => toast('Не получилось — выдели адрес вручную'));
     return;
   }
-  if ('rest' in ds) { const d = day(); d.rest = !d.rest; commit(d.rest ? '🌿 Отдыхай спокойно · +15 XP' : null); return; }
-  if (ds.delWin !== undefined) { day().wins.splice(+ds.delWin, 1); commit(); return; }
-
-  if (ds.fmin) { state.lastFocus = +ds.fmin; save(); render(); return; }
-  if ('focusStart' in ds) { startFocus(); return; }
-  if ('doorGo' in ds) { state.door = { start: Date.now() }; save(); render(); toast('Иди! Телефон подождёт 🚪'); return; }
-  if ('doorBack' in ds) {
-    const min = (Date.now() - state.door.start) / 60000;
-    state.door = null;
-    if (min < 1) { save(); render(); toast('Так быстро? Засчитаю в следующий раз 😉'); return; }
-    day().doors++; commit('🚪 Без телефона! · +10 XP'); return;
-  }
-  if ('doorCancel' in ds) { state.door = null; save(); render(); return; }
-
-  if (ds.sos === 'wave') return sosWave();
-  if (ds.sos === 'mini') return sosMini();
-  if (ds.sos === 'door') { closeModal(); state.tab = 'focus'; state.door = { start: Date.now() }; save(); render(); toast('Иди! Телефон подождёт 🚪'); return; }
-  if (ds.sos === 'scroll') return sosScroll();
-  if ('scrollCancel' in ds) { state.scroll = null; save(); closeModal(); toast('Отличный выбор 💚'); return; }
-
-  if (ds.buy) {
-    const r = state.rewards.find(x => x.id === ds.buy);
-    if (totals().coins < r.cost) return;
-    state.purchases.push({ id: uid(), rewardId: r.id, name: r.name, emoji: r.emoji, cost: r.cost, at: Date.now() });
-    commit(`${r.emoji} Наслаждайся — ты заслужила!`);
-    return;
-  }
-  if (ds.editReward) return editReward(ds.editReward);
-  if ('addReward' in ds) return editReward(null);
-  if (ds.delReward) { state.rewards = state.rewards.filter(x => x.id !== ds.delReward); closeModal(); commit('Удалено'); return; }
-
   if ('export' in ds) {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = `rostok-${today()}.json`; a.click();
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }));
+    a.download = `rostok-${today()}.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     return;
   }
   if ('import' in ds) { $('#importFile').click(); return; }
-  if ('about' in ds) return showAbout(false);
   if ('onbDone' in ds) {
     const n = $('#onbName')?.value.trim();
     if (n) state.name = n;
-    state.onboarded = true; save(); closeModal(); render(); return;
+    state.onboarded = true; closeModal(); commit(); return;
   }
   if ('reset' in ds) {
-    if (confirm('Точно удалить все данные и начать заново? Это нельзя отменить.')) { state = defaultState(); lastXP = 0; save(); render(); showAbout(true); }
-    return;
+    if (confirm('Удалить все данные? Это нельзя отменить.')) { state = defaultState(); save(); render(); showWelcome(); }
   }
 });
-
 document.addEventListener('submit', e => {
-  if (e.target.id === 'winForm') {
-    e.preventDefault();
-    const v = $('#winInput').value.trim();
-    if (!v) return;
-    day().wins.push(v);
-    commit('🎉 Победа записана · +3 XP');
-  }
+  if (e.target.id !== 'winForm') return;
+  e.preventDefault();
+  const v = $('#winInput').value.trim();
+  if (!v) return;
+  state.wins.push({ id: uid(), date: today(), text: v });
+  commit('💚 Записано');
 });
 document.addEventListener('change', e => {
   if (e.target.id === 'nameInput') { state.name = e.target.value.trim(); save(); toast('Запомнила 💚'); }
@@ -768,16 +699,18 @@ document.addEventListener('change', e => {
     if (!file) return;
     file.text().then(txt => {
       const data = JSON.parse(txt);
-      if (!data || typeof data !== 'object' || !data.log || !Array.isArray(data.habits)) throw new Error('bad');
-      state = { ...defaultState(), ...data }; lastXP = totals().xp; save(); render(); toast('Данные загружены ✅');
+      if (!data || data.version !== 2 || !Array.isArray(data.acts)) throw new Error('bad');
+      state = { ...defaultState(), ...data }; save(); render(); toast('Данные загружены ✅');
     }).catch(() => toast('Не получилось прочитать файл'));
   }
 });
+// подсказки зависят от времени суток — обновляем при возвращении в приложение
+document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#modal').classList.contains('hidden')) render(); });
 
 // ---------- старт ----------
 render();
-if (!state.onboarded) showAbout(true);
-else if (state.scroll) returnFromScroll();
-if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
-}
+const params = new URLSearchParams(location.search);
+if (!state.onboarded) showWelcome();
+else if (params.get('from') === 'insta') showInsta();
+if (params.has('from')) history.replaceState(null, '', siteUrl());
+if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});

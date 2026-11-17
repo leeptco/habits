@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Росток</title>
-  <meta name="description" content="Мягкий трекер привычек в игровом формате">
+  <meta name="description" content="План дня по Эйзенхауэру, время на хобби и поиск работы">
   <meta name="theme-color" content="#1d1b26">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
@@ -14,19 +14,17 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div id="timerBar" class="timer-bar hidden"></div>
   <main id="screen"></main>
 
-  <button id="sos" class="sos" aria-label="Тянет залипнуть">🆘 Тянет залипнуть</button>
-
   <nav class="tabs">
-    <button data-tab="today" class="active"><span>☀️</span>Сегодня</button>
-    <button data-tab="focus"><span>📵</span>Без телефона</button>
-    <button data-tab="hero"><span>🌱</span>Росток</button>
-    <button data-tab="shop"><span>🎁</span>Награды</button>
+    <button data-tab="plan" class="active"><span>🗓️</span>План</button>
+    <button data-tab="acts"><span>🧶</span>Занятия</button>
+    <button data-tab="wins"><span>💚</span>Победы</button>
+    <button data-tab="more"><span>⚙️</span>Ещё</button>
   </nav>
 
   <div id="modal" class="modal hidden"><div class="sheet" id="sheet"></div></div>
-  <div id="focusOverlay" class="focus-overlay hidden"></div>
   <div id="toasts" class="toasts"></div>
 
   <script src="app.js"></script>

@@ -1,4 +1,4 @@
-const CACHE = 'rostok-v1';
+const CACHE = 'rostok-v2';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon.svg'];
 
 self.addEventListener('install', e => {
