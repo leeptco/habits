@@ -616,18 +616,19 @@ function viewMore() {
     <details><summary>Собрать команду «${esc(state.syncShortcut)}» (5 минут)</summary>
     <ol class="steps">
       <li>«Команды» → ＋ → назови команду <b>${esc(state.syncShortcut)}</b>.</li>
-      <li>Действие <b>«Найти напоминания»</b> → фильтр <b>«Выполнено» — «нет»</b>. Можно добавить фильтр по списку.</li>
-      <li>Действие <b>«Повторить с каждым»</b>. Внутри повтора — действие <b>«Текст»</b>, в нём через вертикальную черту:
-        <br><code>R|Название|Дата выполнения|Список|С флажком|Приоритет</code>
-        <ul><li>Каждое слово — это переменная «Повторяемый объект». Нажми на неё и выбери нужное свойство.</li>
-        <li>У «Даты выполнения» выбери формат <b>ISO 8601</b> и включи время.</li></ul></li>
-      <li>После повтора — <b>«Объединить текст»</b> из «Результатов повтора», разделитель «Новая строка».</li>
+      <li><b>«Найти напоминания»</b> <span class="muted">(Find Reminders)</span> → фильтр <b>«Выполнено» — «нет»</b> <span class="muted">(Is Not Completed)</span>.</li>
+      <li><b>«Повторить с каждым»</b> <span class="muted">(Repeat with Each)</span>. Внутри повтора — <b>«Текст»</b> <span class="muted">(Text)</span>:
+        <br><code>R|Название|Дата выполнения</code> <span class="muted">(R|Title|Due Date)</span>. Если захочешь, потом добавь <code>|Список|С флажком|Приоритет</code> <span class="muted">(List, Is Flagged, Priority)</span>.
+        <ul><li>Каждое слово — переменная «Повторяемый объект» <span class="muted">(Repeat Item)</span>. Нажми на неё и выбери свойство: «Название» <span class="muted">(Title)</span> и т. д.</li>
+        <li>У даты: «Формат даты» → <b>ISO 8601</b>, включи время <span class="muted">(Date Format → ISO 8601, Include ISO 8601 Time)</span>.</li></ul></li>
+      <li>После «Конца повтора» — <b>«Объединить текст»</b> из «Результатов повтора», разделитель «Новая строка» <span class="muted">(Combine Repeat Results with New Lines)</span>.</li>
       <li><i>По желанию, события Календаря:</i> <b>«Найти события Календаря»</b>, где дата начала — сегодня. Затем повтор и «Текст» вида <code>E|Название|Дата начала|Дата окончания|Весь день</code> (даты — в ISO 8601). Объединить так же. Оба объединённых текста сложи в один «Текст» через новую строку.</li>
-      <li><b>«Кодировать URL»</b> для итогового текста.</li>
-      <li><b>«Открыть URL-адреса»</b>: <code>${esc(url)}#sync=</code> и сразу за ним переменная «Кодированный URL».</li>
+      <li><b>«Кодировать URL»</b> для объединённого текста <span class="muted">(URL Encode Combined Text)</span>.</li>
+      <li>Действие <b>«URL»</b>: <code>${esc(url)}#sync=</code> и сразу за ним переменная «Кодированный текст» <span class="muted">(URL Encoded Text)</span>.</li>
+      <li>Последним — <b>«Открыть URL-адреса»</b> <span class="muted">(Open URLs)</span>.</li>
       <li>Нажми ⓘ → <b>«На экран „Домой“»</b> и поставь эту команду на место иконки Ростка. Открываешь Росток — напоминания уже там.</li>
     </ol>
-    <button class="btn block" data-copy="${esc(url)}#sync=">Скопировать адрес для шага 7</button>
+    <button class="btn block" data-copy="${esc(url)}#sync=">Скопировать адрес</button>
     </details>
     <label>Название команды синхронизации</label>
     <input id="syncName" value="${esc(state.syncShortcut)}">
