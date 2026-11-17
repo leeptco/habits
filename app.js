@@ -70,17 +70,14 @@ const ICONS = {
   bell: '<path d="M6 16v-5a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>',
   forward: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  chevronDown: '<path d="M6 9l6 6 6-6"/>',
+  chevronUp: '<path d="M6 15l6-6 6 6"/>',
   timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/>',
 };
 const ic = (name, size = 20) => `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.star}</svg>`;
 const ACT_ICONS = ['briefcase', 'film', 'yarn', 'walk', 'book', 'sun', 'dumbbell', 'languages', 'camera', 'music', 'palette', 'pen', 'cup', 'home', 'leaf', 'heart', 'activity', 'star'];
 
 // ---------- справочники ----------
-const CATS = {
-  job:     { name: 'Работа',         hint: 'напоминаю каждый день' },
-  restore: { name: 'Восстановление', hint: 'хобби и антистресс' },
-  grow:    { name: 'Развитие',       hint: 'тело и ум' },
-};
 const MOODS = [
   { v: 1, t: 'Хуже' },
   { v: 2, t: 'Так же' },
@@ -89,35 +86,35 @@ const MOODS = [
 ];
 const moodText = m => MOODS[Math.min(3, Math.max(0, Math.round(m) - 1))].t.toLowerCase();
 const QUADS = {
-  1: { name: 'Сделать',       sub: 'важно и срочно',      short: 'Сделать' },
-  2: { name: 'Запланировать', sub: 'работа, хобби, здоровье', short: 'План' },
-  3: { name: 'Быстро',        sub: 'или попросить',       short: 'Быстро' },
-  4: { name: 'Отпустить',     sub: 'можно не делать',     short: 'Отпустить' },
+  1: { name: 'Важно и срочно',      short: 'Важно<br>срочно' },
+  2: { name: 'Важно, не срочно',    short: 'Важно<br>не срочно' },
+  3: { name: 'Не важно, срочно',    short: 'Не важно<br>срочно' },
+  4: { name: 'Не важно, не срочно', short: 'Не важно<br>не срочно' },
 };
 const PARTS = {
-  morning: { name: 'Утро',  from: 0,  to: 12, def: '09:00' },
-  day:     { name: 'День',  from: 12, to: 18, def: '14:00' },
-  evening: { name: 'Вечер', from: 18, to: 24, def: '19:00' },
+  am: { name: 'Первая половина дня', short: 'до 14:00',   from: 0,  to: 14, def: '10:00' },
+  pm: { name: 'Вторая половина дня', short: 'после 14:00', from: 14, to: 24, def: '16:00' },
 };
-const partOf = t => t.time ? (toMin(t.time) < 720 ? 'morning' : toMin(t.time) < 1080 ? 'day' : 'evening') : (t.part || '');
+const partOf = t => t.time ? (toMin(t.time) < 840 ? 'am' : 'pm') : (t.part || '');
+const defaultPart = () => nowMin() < 840 ? 'am' : 'pm';
 const MILESTONES = [60, 180, 300, 600, 1200, 1800, 3000, 6000, 12000];
 
 const DEFAULT_ACTS = [
-  { id: 'job',   name: 'Поиск работы', icon: 'briefcase', cat: 'job',     goal: 30 },
-  { id: 'video', name: 'Монтаж видео', icon: 'film',      cat: 'restore', goal: 30 },
-  { id: 'knit',  name: 'Вязание',      icon: 'yarn',      cat: 'restore', goal: 20 },
-  { id: 'walk',  name: 'Прогулка',     icon: 'walk',      cat: 'restore', goal: 20 },
-  { id: 'read',  name: 'Чтение',       icon: 'book',      cat: 'restore', goal: 20 },
-  { id: 'morn',  name: 'Зарядка',      icon: 'sun',       cat: 'grow',    goal: 10 },
-  { id: 'gym',   name: 'Силовая',      icon: 'dumbbell',  cat: 'grow',    goal: 40 },
-  { id: 'eng',   name: 'Английский',   icon: 'languages', cat: 'grow',    goal: 20 },
+  { id: 'job',   name: 'Поиск работы', icon: 'briefcase', daily: true, goal: 30 },
+  { id: 'video', name: 'Монтаж видео', icon: 'film', goal: 30 },
+  { id: 'knit',  name: 'Вязание',      icon: 'yarn', goal: 20 },
+  { id: 'walk',  name: 'Прогулка',     icon: 'walk', goal: 20 },
+  { id: 'read',  name: 'Чтение',       icon: 'book', goal: 20 },
+  { id: 'morn',  name: 'Зарядка',      icon: 'sun', goal: 10 },
+  { id: 'gym',   name: 'Силовая',      icon: 'dumbbell', goal: 40 },
+  { id: 'eng',   name: 'Английский',   icon: 'languages', goal: 20 },
 ];
 
 // ---------- состояние ----------
 const KEY = 'rostok-v2';
 function defaultState() {
   return {
-    version: 3, name: '', onboarded: false, tab: 'plan', planView: 'matrix', schedMode: 'hours',
+    version: 4, name: '', onboarded: false, tab: 'plan', planView: 'matrix', schedMode: 'hours',
     acts: DEFAULT_ACTS.map(a => ({ ...a })),
     sessions: [],   // {id, aid, date, min, mood, note, at}
     tasks: [],      // {id, text, q, date, time, part, dur, aid, done, doneDate, src, key, calSent}
@@ -129,7 +126,8 @@ function defaultState() {
     lastSync: null,
     syncShortcut: 'Росток',
     doneShortcut: 'Росток готово',
-    writeBack: false,
+    writeBack: true,
+    inboxOpen: true,
   };
 }
 let state = load();
@@ -142,7 +140,10 @@ function load() {
   // переход со старой версии: эмодзи → линейные иконки
   const byId = Object.fromEntries(DEFAULT_ACTS.map(a => [a.id, a.icon]));
   for (const a of s.acts) { if (!a.icon) a.icon = byId[a.id] || 'star'; delete a.emoji; }
-  s.version = 3;
+  for (const a of s.acts) { if (a.cat === 'job') a.daily = true; delete a.cat; }
+  for (const t of s.tasks) { if (t.part === 'morning') t.part = 'am'; else if (t.part === 'day' || t.part === 'evening') t.part = 'pm'; }
+  if ((s.version || 0) < 4) s.writeBack = true; // закрывать напоминания в приложении Напоминания по умолчанию
+  s.version = 4;
   return s;
 }
 function save() {
@@ -176,7 +177,7 @@ function nudges() {
   const out = [];
   const hour = new Date().getHours();
 
-  for (const a of liveActs().filter(a => a.cat === 'job')) {
+  for (const a of liveActs().filter(a => a.daily)) {
     const s = actStats(a.id);
     const planned = state.tasks.some(t => t.aid === a.id && t.date <= today() && !t.done);
     if (s.todayMin >= a.goal) {
@@ -191,7 +192,7 @@ function nudges() {
     }
   }
 
-  const restore = liveActs().filter(a => a.cat === 'restore').map(a => ({ a, s: actStats(a.id) }));
+  const restore = liveActs().filter(a => !a.daily).map(a => ({ a, s: actStats(a.id) }));
   const neglected = restore.filter(x => x.s.since !== null && x.s.since >= 3).sort((x, y) => y.s.since - x.s.since)[0];
   if (neglected) {
     const { a, s } = neglected;
@@ -210,7 +211,7 @@ function nudges() {
     out.push({ icon: 'walk', html: '<b>Прогуляйся 15 минут.</b> Можно до магазина и обратно. Телефон — в карман.', aid: walk.id });
   }
 
-  const momentum = liveActs().map(a => ({ a, s: actStats(a.id) })).filter(x => x.s.week > 0 && x.a.cat !== 'job').sort((x, y) => y.s.week - x.s.week)[0];
+  const momentum = liveActs().map(a => ({ a, s: actStats(a.id) })).filter(x => x.s.week > 0 && !x.a.daily).sort((x, y) => y.s.week - x.s.week)[0];
   if (momentum) {
     const { a, s } = momentum, next = nextMilestone(s.total);
     out.push({ icon: 'trend', html: `<b>${esc(a.name)}: ${fmtMin(s.total)} всего, ${fmtMin(s.week)} за неделю.</b> До отметки «${fmtMin(next)}» осталось ${fmtMin(next - s.total)}.` });
@@ -238,6 +239,7 @@ function parseDT(s) {
   s = (s || '').trim();
   if (!s) return {};
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return { date: s };
+  if (/^\d{4}-\d{2}-\d{2}T00:00(:00)?/.test(s)) return { date: s.slice(0, 10) };
   const d = new Date(s);
   if (!isNaN(d)) { const t = hm(d); return { date: dkey(d), time: t === '00:00' ? '' : t }; }
   const m = s.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
@@ -420,12 +422,15 @@ function viewPlan() {
   }
 
   if (inbox.length) {
-    html += `<h2>Из Напоминаний — куда отнести?</h2><div class="card inbox">`;
-    for (const t of inbox) {
-      html += `<div class="item"><div data-task="${t.id}" style="cursor:pointer">${esc(t.text)}${taskMeta(t)}</div>
-        <div class="qpick">${[1, 2, 3, 4].map(q => `<button style="border-color:var(--q${q})" data-setq="${t.id}" data-q="${q}">${QUADS[q].short}</button>`).join('')}</div></div>`;
+    html += `<button class="fold" data-fold-inbox><span>Из Напоминаний — куда отнести? <span class="muted">${inbox.length}</span></span>${ic(state.inboxOpen ? 'chevronUp' : 'chevronDown', 18)}</button>`;
+    if (state.inboxOpen) {
+      html += `<div class="card inbox">`;
+      for (const t of inbox) {
+        html += `<div class="item"><div data-task="${t.id}" style="cursor:pointer">${esc(t.text)}${taskMeta(t)}</div>
+          <div class="qpick">${[1, 2, 3, 4].map(q => `<button style="border-color:var(--q${q})" data-setq="${t.id}" data-q="${q}">${QUADS[q].short}</button>`).join('')}</div></div>`;
+      }
+      html += `</div>`;
     }
-    html += `</div>`;
   }
 
   html += `<div class="seg" style="margin-top:20px">
@@ -434,20 +439,20 @@ function viewPlan() {
   html += state.planView === 'sched' ? viewSched(tt) : viewMatrix(tt);
 
   const pend = calPending();
-  html += `<button class="btn ${pend.length ? 'primary' : ''} block" style="margin-top:14px" data-cal-day ${pend.length ? '' : 'disabled'}>
-    ${ic('bell', 18)} ${pend.length ? `Поставить напоминания в Календарь (${pend.length})` : 'Все дела со временем уже в Календаре'}</button>`;
+  if (pend.length) html += `<button class="btn primary block" style="margin-top:14px" data-cal-day>${ic('bell', 18)} Поставить напоминания в Календарь (${pend.length})</button>`;
   return html;
 }
+const openQuads = new Set();
 function viewMatrix(tt) {
   const q = n => tt.filter(t => t.q === n).sort((a, b) => (a.done - b.done) || (a.time || '99').localeCompare(b.time || '99'));
-  const quad = n => `<div class="quad q${n}"><h4>${QUADS[n].name}</h4><div class="sub">${QUADS[n].sub}</div>
-    ${q(n).map(taskHtml).join('')}
-    <button class="add" data-add-task="${n}">${ic('plus', 14)} добавить</button></div>`;
-  return `<div class="mx" style="margin-top:12px">
-    <div></div><div class="ax">срочно</div><div class="ax">не срочно</div>
-    <div class="ay">важно</div>${quad(1)}${quad(2)}
-    <div class="ay">не важно</div>${quad(3)}${quad(4)}
-  </div>`;
+  const quad = n => {
+    const all = q(n), LIM = 5, shown = openQuads.has(n) ? all : all.slice(0, LIM);
+    return `<div class="quad q${n}"><h4>${QUADS[n].name}</h4>
+      ${shown.map(taskHtml).join('')}
+      ${all.length > LIM ? `<button class="add" data-open-quad="${n}">${openQuads.has(n) ? 'свернуть' : `ещё ${all.length - LIM}`}</button>` : ''}
+      <button class="add" data-add-task="${n}">${ic('plus', 14)} добавить</button></div>`;
+  };
+  return `<div class="mx" style="margin-top:12px">${quad(1)}${quad(2)}${quad(3)}${quad(4)}</div>`;
 }
 function blockHtml(t) {
   return `<div class="blk q${t.q || 0} ${t.done ? 'done' : ''}">
@@ -460,7 +465,7 @@ function viewSched(tt) {
   const evs = state.events || [];
   let html = `<div class="seg" style="margin-top:8px">
     <button class="${state.schedMode === 'hours' ? 'on' : ''}" data-sm="hours">По часам</button>
-    <button class="${state.schedMode === 'parts' ? 'on' : ''}" data-sm="parts">Утро · день · вечер</button></div>`;
+    <button class="${state.schedMode === 'parts' ? 'on' : ''}" data-sm="parts">До и после обеда</button></div>`;
 
   // нагрузка: сколько осталось запланировано до конца дня
   const now = nowMin(), dayEnd = 23 * 60;
@@ -506,7 +511,7 @@ function viewSched(tt) {
   const loose = open.filter(t => !t.done && !t.time && !t.part && t.q);
   if (loose.length) {
     html += `<h2>Без времени</h2><div class="card">${loose.map(taskHtml).join('')}
-      <p class="small muted">Нажми на дело, чтобы выбрать время или часть дня.</p></div>`;
+      <p class="small muted">Нажми на дело, чтобы выбрать время.</p></div>`;
   }
   return html;
 }
@@ -515,43 +520,22 @@ function viewSched(tt) {
 function viewActs() {
   const stats = liveActs().map(a => ({ a, s: actStats(a.id) }));
   const ranked = stats.filter(x => x.s.moodN >= 1).sort((x, y) => (y.s.mood - x.s.mood) || (y.s.total - x.s.total));
-  const byTime = stats.filter(x => x.s.total > 0).sort((x, y) => y.s.total - x.s.total);
-  let html = `<h1>Занятия</h1><p class="muted small">Сколько времени ты уже вложила и что помогает больше всего.</p>`;
-
-  html += `<h2>Что помогает тебе больше всего</h2><div class="card">`;
+  let html = `<h1>Занятия</h1>`;
   if (ranked.length) {
-    html += ranked.map((x, i) => `<div class="rank"><span class="n">${i + 1}</span>${ic(x.a.icon)}
-      <span>${esc(x.a.name)}<div class="muted small">после занятия обычно ${moodText(x.s.mood)}</div></span>
-      <span class="muted small">${fmtMin(x.s.total)}</span></div>`).join('');
-    html += `<p class="muted small" style="margin-top:6px">Рейтинг из твоих ответов «как ты после занятия». Когда тяжело — выбирай из верхних строк.</p>`;
-  } else {
-    html += `<p class="muted small">После занятия я спрошу, как ты себя чувствуешь. Через несколько раз здесь появится рейтинг того, что помогает именно тебе.</p>`;
+    html += `<h2>Что помогает больше всего</h2><div class="card">` + ranked.map((x, i) => `<div class="rank"><span class="n">${i + 1}</span>${ic(x.a.icon)}
+      <span>${esc(x.a.name)}</span><span class="muted small">${moodText(x.s.mood)}</span></div>`).join('') + `</div><h2>Все занятия</h2>`;
   }
-  html += `</div>`;
-
-  if (byTime.length) {
-    const sum = byTime.reduce((s, x) => s + x.s.total, 0);
-    html += `<div class="card soft"><div class="row between"><b>Всего вложено в себя</b><b>${fmtMin(sum)}</b></div>
-      ${byTime.slice(0, 4).map(x => `<div class="row between small muted" style="margin-top:4px"><span>${esc(x.a.name)}</span><span>${fmtMin(x.s.total)}</span></div>`).join('')}</div>`;
-  }
-
-  for (const cat of Object.keys(CATS)) {
-    const list = stats.filter(x => x.a.cat === cat);
-    if (!list.length) continue;
-    html += `<h2>${CATS[cat].name} <span class="muted small" style="font-weight:400">· ${CATS[cat].hint}</span></h2>`;
-    for (const { a, s } of list) {
-      const sinceTxt = s.since === null ? 'ещё не было' : s.since === 0 ? 'сегодня' : s.since === 1 ? 'вчера' : `${days(s.since)} назад`;
-      html += `<div class="card act">
-        <div class="ico">${ic(a.icon, 22)}</div>
-        <div><b>${esc(a.name)}</b>
-          <div class="nums">Всего ${fmtMin(s.total)} · неделя ${fmtMin(s.week)}${s.streak > 1 ? ` · ${days(s.streak)} подряд` : ''}</div>
-          <div class="nums ${s.since >= 5 ? 'warn' : ''}">Последний раз: ${sinceTxt}</div></div>
-        <button class="iconbtn" data-edit-act="${a.id}" aria-label="Настроить">${ic('edit', 18)}</button>
-        <div class="btns">
-          <button class="btn primary" data-start="${a.id}">${ic('play', 14)} Таймер</button>
-          <button class="btn" data-log="${a.id}">${ic('check', 14)} Уже сделала</button>
-        </div></div>`;
-    }
+  for (const { a, s } of stats) {
+    const sinceTxt = s.since === null ? 'ещё не было' : s.since === 0 ? 'сегодня' : s.since === 1 ? 'вчера' : `${days(s.since)} назад`;
+    html += `<div class="card act">
+      <div class="ico">${ic(a.icon, 22)}</div>
+      <div><b>${esc(a.name)}</b>
+        <div class="nums">${s.total ? fmtMin(s.total) + ' · ' : ''}<span class="${s.since >= 5 ? 'warn' : ''}">${sinceTxt}</span></div></div>
+      <button class="iconbtn" data-edit-act="${a.id}" aria-label="Настроить">${ic('edit', 18)}</button>
+      <div class="btns">
+        <button class="btn primary" data-start="${a.id}">${ic('play', 14)} Таймер</button>
+        <button class="btn" data-log="${a.id}">${ic('check', 14)} Сделала</button>
+      </div></div>`;
   }
   html += `<button class="btn ghost block" data-add-act>${ic('plus', 16)} Новое занятие</button>`;
   return html;
@@ -635,16 +619,19 @@ function viewMore() {
     <button class="btn block" data-sync>${ic('refresh', 16)} Обновить сейчас</button>
   </div>
 
-  <h2>Отмечать выполненное в Напоминаниях</h2>
+  <h2>Закрывать дела в Напоминаниях</h2>
   <div class="card small">
-    <div class="switch"><span>Когда отмечаю напоминание в Ростке — закрывать его и в Напоминаниях</span><input type="checkbox" id="writeBack" ${state.writeBack ? 'checked' : ''}></div>
+    <div class="switch"><span>Отметила дело в Ростке — оно закрывается и в Напоминаниях</span><input type="checkbox" id="writeBack" ${state.writeBack ? 'checked' : ''}></div>
     <details style="margin-top:8px"><summary>Нужна вторая команда «${esc(state.doneShortcut)}»</summary>
     <ol class="steps">
-      <li>Новая команда <b>${esc(state.doneShortcut)}</b>.</li>
-      <li><b>«Найти напоминания»</b>: «Название» — «является» — <b>Входные данные команды</b>; «Выполнено» — «нет»; лимит 1.</li>
-      <li><b>«Изменить напоминание»</b> (в некоторых версиях iOS — «Задать параметр напоминания») → <b>Выполнено</b> → вкл.</li>
+      <li>Новая команда, название <b>${esc(state.doneShortcut)}</b>.</li>
+      <li><b>Find All Reminders where</b> <span class="muted">(Найти напоминания)</span>:
+        <ul><li>Add Filter → <b>Title</b> → <b>is</b> → значение: переменная <b>Shortcut Input</b> <span class="muted">(Входные данные команды)</span>;</li>
+        <li>Add Filter → <b>Is Not Completed</b>;</li>
+        <li><b>Limit</b> — включить, 1.</li></ul></li>
+      <li>Найди в поиске действий <b>«Completed»</b> или <b>«Edit Reminder»</b> и выбери действие, которое отмечает напоминание выполненным. Вход — «Reminders» из шага 2.</li>
     </ol>
-    <p class="muted">Росток запустит её сам и вернётся обратно.</p>
+    <p class="muted">Ставишь галочку в Ростке → на секунду откроются «Команды» → напоминание закрыто → снова Росток.</p>
     </details>
     <label>Название команды</label>
     <input id="doneName" value="${esc(state.doneShortcut)}">
@@ -755,16 +742,17 @@ function shiftOverdue() {
   let cur = Math.ceil((now + 5) / 15) * 15;
   const overdue = todayTasks().filter(t => !t.done && t.time && toMin(t.time) + (t.dur || 30) <= now).sort((a, b) => a.time.localeCompare(b.time));
   for (const t of overdue) {
-    if (cur >= 24 * 60) { t.date = dkey(addDays(new Date(), 1)); t.time = ''; t.part = 'morning'; continue; }
+    if (cur >= 24 * 60) { t.date = dkey(addDays(new Date(), 1)); t.time = ''; t.part = 'am'; continue; }
     t.time = fromMin(cur); t.localTime = true; t.calSent = false;
     cur += (t.dur || 30) + 10; // 10 минут на передышку между делами
   }
   commit('Сдвинула. Можно выдохнуть');
 }
 function editTask(id, q, preset = {}) {
-  const t = id ? state.tasks.find(x => x.id === id) : { text: '', q: +q || 2, date: today(), time: '', part: '', dur: '', aid: '', ...preset };
+  const t = id ? state.tasks.find(x => x.id === id) : { text: '', q: +q || 2, date: today(), time: '', part: defaultPart(), dur: '', aid: '', ...preset };
   const tomorrow = dkey(addDays(new Date(), 1));
-  let when = t.time ? 'exact' : (t.part || 'none');
+  let when = t.time ? 'exact' : (t.part || '');
+  let quad = t.q || 0;
   openModal(`
     <h2>${id ? 'Дело' : 'Новое дело'}</h2>
     ${t.src === 'rem' ? `<p class="muted small">${ic('list', 14)} Из Напоминаний${t.list ? ` · ${esc(t.list)}` : ''}</p>` : ''}
@@ -772,20 +760,20 @@ function editTask(id, q, preset = {}) {
       <label>Что сделать</label>
       <input name="text" value="${esc(t.text)}" required maxlength="100" ${t.src === 'rem' ? 'readonly' : ''}>
       <label>Квадрат</label>
-      <select name="q">${t.src === 'rem' && !t.q ? '<option value="0" selected>Ещё не решила</option>' : ''}${[1, 2, 3, 4].map(n => `<option value="${n}" ${t.q === n ? 'selected' : ''}>${QUADS[n].name} — ${QUADS[n].sub}</option>`).join('')}</select>
-      <label>Занятие (время засчитается)</label>
-      <select name="aid"><option value="">—</option>${liveActs().map(a => `<option value="${a.id}" ${t.aid === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+      <div class="qgrid" id="qSeg">${[1, 2, 3, 4].map(n => `<button type="button" data-qq="${n}" class="q${n} ${quad === n ? 'on' : ''}">${QUADS[n].name}</button>`).join('')}</div>
       <label>День</label>
       <div class="seg" id="daySeg">
         <button type="button" data-d="${today()}" class="${!t.date || t.date <= today() ? 'on' : ''}">Сегодня</button>
         <button type="button" data-d="${tomorrow}" class="${t.date === tomorrow ? 'on' : ''}">Завтра</button></div>
       <label>Когда</label>
       <div class="seg" id="whenSeg">
-        ${[['none', 'Любое'], ['morning', 'Утро'], ['day', 'День'], ['evening', 'Вечер'], ['exact', 'Точно']].map(([k, n]) => `<button type="button" data-w="${k}" class="${when === k ? 'on' : ''}">${n}</button>`).join('')}</div>
-      <div class="row" style="align-items:flex-end">
-        <div class="grow ${when === 'exact' ? '' : 'hidden'}" id="timeBox"><label>Время</label><input name="time" type="time" value="${esc(t.time || '')}"></div>
-        <div class="grow"><label>Минут</label><input name="dur" type="number" inputmode="numeric" min="5" max="600" step="5" value="${t.dur || ''}"></div>
-      </div>
+        ${[['am', 'До 14:00'], ['pm', 'После 14:00'], ['exact', 'Точно']].map(([k, n]) => `<button type="button" data-w="${k}" class="${when === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      <div class="${when === 'exact' ? '' : 'hidden'}" id="timeBox"><label>Время</label><input name="time" type="time" value="${esc(t.time || '')}"></div>
+      <details style="margin-top:12px" ${t.aid || t.dur ? 'open' : ''}><summary class="muted small">Длительность и занятие</summary>
+        <label>Минут</label><input name="dur" type="number" inputmode="numeric" min="5" max="600" step="5" value="${t.dur || ''}">
+        <label>Занятие (время засчитается)</label>
+        <select name="aid"><option value="">—</option>${liveActs().map(a => `<option value="${a.id}" ${t.aid === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+      </details>
       <button class="btn primary block" type="submit" style="margin-top:16px">Сохранить</button>
       ${id && t.time && t.src !== 'rem' ? `<button class="btn block" type="button" data-cal-task="${id}">${ic('bell', 16)} ${t.calSent ? 'Ещё раз в Календарь' : 'Поставить напоминание в Календарь'}</button>` : ''}
       ${id && t.src !== 'rem' ? `<button class="btn danger block" type="button" data-del-task="${id}">Удалить</button>` : ''}
@@ -793,6 +781,7 @@ function editTask(id, q, preset = {}) {
     </form>`, sheet => {
     const form = $('#taskForm', sheet);
     let date = !t.date || t.date <= today() ? today() : t.date;
+    $$('#qSeg button', sheet).forEach(b => b.onclick = () => { quad = +b.dataset.qq; $$('#qSeg button', sheet).forEach(x => x.classList.toggle('on', x === b)); });
     $$('#daySeg button', sheet).forEach(b => b.onclick = () => { date = b.dataset.d; $$('#daySeg button', sheet).forEach(x => x.classList.toggle('on', x === b)); });
     $$('#whenSeg button', sheet).forEach(b => b.onclick = () => {
       when = b.dataset.w;
@@ -808,8 +797,10 @@ function editTask(id, q, preset = {}) {
     form.onsubmit = e => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(form));
+      if (!quad) { toast('Выбери квадрат'); return; }
+      if (!when) { toast('Выбери, когда: до или после 14:00'); return; }
       const time = when === 'exact' ? f.time : '';
-      const data = { text: f.text.trim(), q: +f.q, aid: f.aid, date, time, part: ['morning', 'day', 'evening'].includes(when) ? when : '', dur: f.dur ? +f.dur : null };
+      const data = { text: f.text.trim(), q: quad, aid: f.aid, date, time, part: when === 'am' || when === 'pm' ? when : '', dur: f.dur ? +f.dur : null };
       if (id) {
         if (t.time !== time || t.date !== date) data.calSent = false;
         if (t.src === 'rem') { data.localTime = true; state.remQuad[t.key] = data.q; }
@@ -821,7 +812,7 @@ function editTask(id, q, preset = {}) {
   });
 }
 function editAct(id) {
-  const a = id ? actById(id) : { name: '', icon: 'star', cat: 'restore', goal: 20 };
+  const a = id ? actById(id) : { name: '', icon: 'star', goal: 20 };
   let icon = a.icon;
   const dayNames = [['MO', 'Пн'], ['TU', 'Вт'], ['WE', 'Ср'], ['TH', 'Чт'], ['FR', 'Пт'], ['SA', 'Сб'], ['SU', 'Вс']];
   openModal(`
@@ -831,18 +822,17 @@ function editAct(id) {
       <input name="name" value="${esc(a.name)}" required maxlength="40">
       <label>Иконка</label>
       <div class="iconpick">${ACT_ICONS.map(k => `<button type="button" data-ic="${k}" class="${k === icon ? 'on' : ''}">${ic(k, 22)}</button>`).join('')}</div>
-      <label>Тип</label>
-      <select name="cat">${Object.entries(CATS).map(([k, c]) => `<option value="${k}" ${a.cat === k ? 'selected' : ''}>${c.name} — ${c.hint}</option>`).join('')}</select>
       <label>Обычно занимаюсь, минут</label>
       <input name="goal" type="number" inputmode="numeric" min="5" max="600" step="5" value="${a.goal}">
+      <div class="switch" style="margin-top:14px"><span>Напоминать каждый день</span><input type="checkbox" name="daily" ${a.daily ? 'checked' : ''}></div>
       <button class="btn primary block" type="submit" style="margin-top:16px">Сохранить</button>
     </form>
     ${id ? `
     <h2>Регулярное напоминание</h2>
     <p class="muted small">Повторяющееся событие в Календаре iPhone — он сам будет напоминать.</p>
-    <label>Время</label><input id="recTime" type="time" value="${a.cat === 'job' ? '11:00' : '19:00'}">
+    <label>Время</label><input id="recTime" type="time" value="${a.daily ? '11:00' : '19:00'}">
     <label>Дни</label>
-    <div class="pills" id="recDays">${dayNames.map(([k, n], i) => `<button type="button" class="pill ${a.cat === 'job' ? (i < 5 ? 'on' : '') : (i % 2 === 0 ? 'on' : '')}" data-rd="${k}">${n}</button>`).join('')}</div>
+    <div class="pills" id="recDays">${dayNames.map(([k, n], i) => `<button type="button" class="pill ${a.daily ? (i < 5 ? 'on' : '') : (i % 2 === 0 ? 'on' : '')}" data-rd="${k}">${n}</button>`).join('')}</div>
     <button class="btn block" id="recAdd" style="margin-top:10px">${ic('bell', 16)} Добавить в Календарь</button>
     <button class="btn danger block" data-del-act="${id}">Убрать занятие</button>` : ''}
     <button class="btn ghost block" data-close>Закрыть</button>`, sheet => {
@@ -852,6 +842,7 @@ function editAct(id) {
       const f = Object.fromEntries(new FormData(e.target));
       f.goal = Math.max(5, parseInt(f.goal, 10) || 20);
       f.icon = icon;
+      f.daily = !!f.daily;
       if (id) Object.assign(a, f); else state.acts.push({ id: uid(), ...f });
       closeModal(); commit('Сохранено');
     };
@@ -863,7 +854,7 @@ function editAct(id) {
       openIcs([icsEvent({
         title: a.name, date: today(), time: $('#recTime').value || '19:00', dur: a.goal,
         rrule: `FREQ=WEEKLY;BYDAY=${byday.join(',')}`,
-        note: a.cat === 'job' ? 'Даже 20 минут сдвигают дело. Отметь в Ростке, когда закончишь.' : 'Это время для тебя. Отметь в Ростке, как себя чувствуешь после.',
+        note: a.daily ? 'Даже 20 минут сдвигают дело. Отметь в Ростке, когда закончишь.' : 'Это время для тебя. Отметь в Ростке, как себя чувствуешь после.',
       })], 'rostok.ics');
     };
   });
@@ -872,16 +863,16 @@ function showWelcome() {
   openModal(`
     <div class="big-ic">${ic('leaf', 32)}</div>
     <h2 class="center">Росток</h2>
-    <p><b>План дня</b> — матрица Эйзенхауэра или расписание по часам. Поиск работы и хобби живут в квадрате «Запланировать»: его обычно съедают все остальные.</p>
+    <p><b>План дня</b> — матрица Эйзенхауэра или расписание. Поиск работы и хобби живут в квадрате «Важно, не срочно»: его обычно съедают все остальные.</p>
     <p><b>Каждый день подскажу</b> найти время на поиск работы, прогуляться, вернуться к хобби, которое давно забросила, — и покажу, сколько времени ты уже вложила.</p>
     <p><b>Напоминания</b> приходят из твоего Календаря, а дела из Напоминаний подтягиваются сюда. Как это настроить — во вкладке «Ещё».</p>
     <label>Как к тебе обращаться (необязательно)</label><input id="onbName" maxlength="30">
     <button class="btn primary block" data-onb-done>Начать</button>`);
 }
 function showInsta() {
-  const job = liveActs().find(a => a.cat === 'job');
+  const job = liveActs().find(a => a.daily);
   const jobS = job ? actStats(job.id) : null;
-  const restore = liveActs().filter(a => a.cat === 'restore').map(a => ({ a, s: actStats(a.id) }));
+  const restore = liveActs().filter(a => !a.daily).map(a => ({ a, s: actStats(a.id) }));
   const best = restore.filter(x => x.s.mood).sort((x, y) => y.s.mood - x.s.mood)[0]
     || [...restore].sort((x, y) => (y.s.since ?? 999) - (x.s.since ?? 999))[0];
   const walk = actById('walk');
@@ -934,6 +925,8 @@ document.addEventListener('click', e => {
     openIcs(pend.map(x => icsEvent({ title: x.text, date: x.date && x.date > today() ? x.date : today(), time: x.time, dur: x.dur })), 'rostok-day.ics');
     return;
   }
+  if ('foldInbox' in ds) { state.inboxOpen = !state.inboxOpen; commit(); return; }
+  if (ds.openQuad) { const n = +ds.openQuad; openQuads.has(n) ? openQuads.delete(n) : openQuads.add(n); render(); return; }
   if (ds.pv) { state.planView = ds.pv; commit(); return; }
   if (ds.sm) { state.schedMode = ds.sm; commit(); return; }
   if ('shift' in ds) return shiftOverdue();
@@ -941,7 +934,7 @@ document.addEventListener('click', e => {
   if ('sync' in ds) { runShortcut(state.syncShortcut); return; }
   if (ds.planAct) {
     const a = actById(ds.planAct);
-    return editTask(null, 2, { text: a.name, aid: a.id, dur: a.goal, part: a.cat === 'job' ? 'morning' : 'evening' });
+    return editTask(null, 2, { text: a.name, aid: a.id, dur: a.goal, part: a.daily ? 'am' : 'pm' });
   }
   if (ds.start) return startTimer(ds.start);
   if ('stop' in ds) return stopTimer();
