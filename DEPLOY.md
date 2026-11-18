@@ -83,7 +83,7 @@ useradd --system --create-home --home-dir /var/lib/rostok --shell /usr/sbin/nolo
 nano /etc/systemd/system/rostok.service
 ```
 
-Вставь (почту в `VAPID_SUBJECT` замени на свою: сервисы уведомлений Apple и Google требуют контакт):
+Вставь. `VAPID_SUBJECT` — это не адрес, куда приходят уведомления (они приходят на телефон), а контакт владельца **сервера** для служб уведомлений Apple и Google. Он один на весь сервер, сколько бы ни было пользователей. Почта не обязательна: подойдёт адрес самого Ростка, `https://…`.
 
 ```
 [Unit]
@@ -96,7 +96,7 @@ WorkingDirectory=/opt/rostok/server
 ExecStart=/usr/bin/env node server.js
 Environment=PORT=8787
 Environment=DATA_DIR=/var/lib/rostok
-Environment=VAPID_SUBJECT=mailto:твоя-почта@example.com
+Environment=VAPID_SUBJECT=https://rostok.1-2-3-4.sslip.io
 Restart=always
 
 [Install]
