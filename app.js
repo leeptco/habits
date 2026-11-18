@@ -141,7 +141,8 @@ function defaultState() {
     doneLog: {},     // {дата: сколько дел отмечено}
     histFilter: '',
     timerAlerts: true,
-    dailyGoal: 2,     // сколько дел/занятий в день — это «день засчитан»
+    dayGoals: {},     // {дата: {kind: 'act'|'task'|'text', ref, text, done}} — дело дня, выбранное самой
+    timerEvery: 30,   // через сколько минут спрашивать «как успехи?»
   };
 }
 let state = load();
@@ -175,8 +176,8 @@ function save() { stamp(); persist(); scheduleSync(); }
 // для каждой записи побеждает более свежая версия, удаления помнятся (del).
 const AUTH_KEY = 'rostok-auth';
 const COLLS = ['acts', 'sessions', 'tasks', 'wins', 'insta'];
-const MAPS = ['doneLog', 'remQuad'];
-const SCALARS = ['name', 'writeBack', 'doneShortcut', 'syncShortcut', 'timerAlerts', 'lastSync', 'events', 'timer', 'dailyGoal'];
+const MAPS = ['doneLog', 'remQuad', 'dayGoals'];
+const SCALARS = ['name', 'writeBack', 'doneShortcut', 'syncShortcut', 'timerAlerts', 'lastSync', 'events', 'timer', 'timerEvery'];
 let auth = (() => { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch (e) { return null; } })();
 let server = { ok: false, push: false };
 let snap = null, lastSyncOk = null, syncing = false, syncAgain = false, syncTimer = null;
@@ -349,73 +350,134 @@ function applyTheme(pref = themePref()) {
 }
 function setTheme(pref) { try { localStorage.setItem('rostok-theme', pref); } catch (e) { /* ничего */ } applyTheme(pref); }
 
-// ---------- персонаж ----------
-let mascotN = 0;
-function mascot(mood = 'happy', size = 110, cls = '') {
-  const n = ++mascotN;
-  const dark = '#151a33';
-  const eyes = mood === 'proud'
-    ? `<path d="M36 55q9-10 18 0M66 55q9-10 18 0" stroke="${dark}" stroke-width="4" fill="none" stroke-linecap="round"/>`
-    : `<ellipse cx="45" cy="54" rx="11" ry="12.5" fill="#fff"/><ellipse cx="75" cy="54" rx="11" ry="12.5" fill="#fff"/>
-       <circle cx="${mood === 'sleepy' ? 46 : 47}" cy="${mood === 'sleepy' ? 59 : 56}" r="5.2" fill="${dark}"/><circle cx="${mood === 'sleepy' ? 76 : 77}" cy="${mood === 'sleepy' ? 59 : 56}" r="5.2" fill="${dark}"/>
-       ${mood === 'sleepy' ? `<path d="M33.5 54a11.5 12.5 0 0 1 23 0zM63.5 54a11.5 12.5 0 0 1 23 0z" fill="url(#lid${n})"/>` : ''}`;
-  const mouth = mood === 'sleepy'
-    ? `<path d="M54 79q6 3 12 0" stroke="${dark}" stroke-width="3.2" fill="none" stroke-linecap="round"/>`
-    : `<path d="M50 75q10 ${mood === 'proud' ? 12 : 9} 20 0" stroke="${dark}" stroke-width="3.6" fill="none" stroke-linecap="round"/>`;
-  return `<svg class="mascot ${cls}" width="${size}" height="${Math.round(size * 1.12)}" viewBox="0 0 120 134" aria-hidden="true">
+// ---------- персонаж: росток в горшке, растёт вместе с серией ----------
+const STAGES = [
+  { from: 0, name: 'Семечко' }, { from: 1, name: 'Росточек' }, { from: 3, name: 'Побег' },
+  { from: 7, name: 'Бутон' }, { from: 14, name: 'Цветок' }, { from: 30, name: 'Цветущий' },
+];
+const stageOf = streak => STAGES.reduce((acc, st, i) => (streak >= st.from ? i : acc), 0);
+let sproutN = 0;
+function sprout(stage = 0, mood = 'happy', size = 104) {
+  const n = ++sproutN;
+  const top = [78, 64, 54, 46, 40, 38][stage];
+  const leaf = (x, y, rot, sz, flip) => `<path transform="translate(${x} ${y}) rotate(${rot}) scale(${flip ? -sz : sz} ${sz})"
+      d="M0 0C4-9 13-13 24-12C22-2 13 4 0 0Z" fill="url(#lf${n})"/>`;
+  const leaves = [
+    leaf(60, 80, -18, .55, false) + leaf(60, 80, 18, .55, true),
+    leaf(60, 72, -22, .8, false) + leaf(60, 74, 22, .75, true),
+    leaf(60, 76, -16, .85, false) + leaf(60, 78, 16, .8, true) + leaf(60, 62, -30, .7, false) + leaf(60, 64, 30, .65, true),
+    leaf(60, 78, -14, .9, false) + leaf(60, 80, 14, .85, true) + leaf(60, 64, -28, .8, false) + leaf(60, 66, 28, .75, true),
+    leaf(60, 80, -12, .95, false) + leaf(60, 82, 12, .9, true) + leaf(60, 66, -26, .85, false) + leaf(60, 68, 26, .8, true),
+    leaf(60, 80, -12, 1, false) + leaf(60, 82, 12, .95, true) + leaf(60, 66, -26, .9, false) + leaf(60, 68, 26, .85, true),
+  ][stage];
+  const flower = (cx, cy, r) => [0, 72, 144, 216, 288].map(a => `<circle cx="${cx + Math.cos(a * Math.PI / 180) * r}" cy="${cy + Math.sin(a * Math.PI / 180) * r}" r="${r * .85}" fill="#ffb3c8"/>`).join('') + `<circle cx="${cx}" cy="${cy}" r="${r * .7}" fill="#ffd56b"/>`;
+  const crown = stage === 3 ? `<ellipse cx="60" cy="${top - 4}" rx="6" ry="8" fill="#ff9fbd"/><path d="M54 ${top}q6 4 12 0" stroke="#7cc97a" stroke-width="3" fill="none"/>`
+    : stage === 4 ? flower(60, top - 5, 6)
+    : stage === 5 ? flower(60, top - 5, 7) + `<path d="M60 70q-14-4-20-14M60 66q14-4 20-14" stroke="#6fbf6d" stroke-width="2.5" fill="none"/>` + flower(39, 54, 4) + flower(81, 50, 4)
+      + '<path d="M22 30l2 5 5 2-5 2-2 5-2-5-5-2 5-2zM98 22l1.5 4 4 1.5-4 1.5-1.5 4-1.5-4-4-1.5 4-1.5z" fill="#ffd56b"/>'
+    : '';
+  const eyes = mood === 'sleepy'
+    ? '<path d="M44 111q4 3 8 0M68 111q4 3 8 0" stroke="#1b2140" stroke-width="2.6" fill="none" stroke-linecap="round"/>'
+    : mood === 'proud'
+      ? '<path d="M44 112q4-5 8 0M68 112q4-5 8 0" stroke="#1b2140" stroke-width="2.6" fill="none" stroke-linecap="round"/>'
+      : '<circle cx="48" cy="110" r="3.6" fill="#1b2140"/><circle cx="72" cy="110" r="3.6" fill="#1b2140"/><circle cx="49.2" cy="108.8" r="1.1" fill="#fff"/><circle cx="73.2" cy="108.8" r="1.1" fill="#fff"/>';
+  return `<svg class="sprout" width="${size}" height="${Math.round(size * 1.17)}" viewBox="0 0 120 140" aria-hidden="true">
     <defs>
-      <radialGradient id="mg${n}" cx="38%" cy="30%" r="75%"><stop offset="0" stop-color="#f3f5ff"/><stop offset=".42" stop-color="#a9baff"/><stop offset="1" stop-color="#5672f0"/></radialGradient>
-      <linearGradient id="lid${n}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8ea2fb"/><stop offset="1" stop-color="#7b92f6"/></linearGradient>
-      <filter id="mb${n}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4"/></filter>
+      <linearGradient id="lf${n}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b7ec9f"/><stop offset="1" stop-color="#5fb768"/></linearGradient>
+      <linearGradient id="pt${n}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a9baff"/><stop offset="1" stop-color="#5672f0"/></linearGradient>
     </defs>
-    <ellipse cx="60" cy="128" rx="30" ry="4.5" fill="#5672f0" opacity=".25"/>
-    <path d="M46 100v22M74 100v22" stroke="#6f87f3" stroke-width="8" stroke-linecap="round"/>
-    <circle cx="60" cy="58" r="46" fill="url(#mg${n})" filter="url(#mb${n})" opacity=".7"/>
-    <circle cx="60" cy="58" r="43" fill="url(#mg${n})"/>
-    ${eyes}${mouth}
-    ${mood === 'proud' ? '<circle cx="34" cy="70" r="5" fill="#ff9fb8" opacity=".6"/><circle cx="86" cy="70" r="5" fill="#ff9fb8" opacity=".6"/>' : ''}
+    <ellipse cx="60" cy="136" rx="30" ry="3.5" fill="#5672f0" opacity=".25"/>
+    <path d="M60 90Q57 ${(90 + top) / 2} 60 ${top}" stroke="#6fbf6d" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+    ${leaves}${crown}
+    <rect x="25" y="86" width="70" height="12" rx="6" fill="url(#pt${n})"/>
+    <path d="M30 96H90L83 133Q82 135 80 135H40Q38 135 37 133Z" fill="url(#pt${n})"/>
+    ${eyes}
+    <path d="M55 118q5 ${mood === 'sleepy' ? 2 : 5} 10 0" stroke="#1b2140" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+    <circle cx="41" cy="117" r="3.5" fill="#ff9fb8" opacity=".55"/><circle cx="79" cy="117" r="3.5" fill="#ff9fb8" opacity=".55"/>
   </svg>`;
 }
 
-// ---------- цель дня и серия ----------
-const dayActions = k => state.sessions.filter(x => x.date === k).length + ((state.doneLog || {})[k] || 0);
+// ---------- дело дня (выбираешь сама) и серия ----------
+const goalOf = k => (state.dayGoals || {})[k] || null;
+function goalDone(k) {
+  const g = goalOf(k);
+  if (!g) return false;
+  if (g.kind === 'act') return g.done || state.sessions.some(x => x.date === k && x.aid === g.ref);
+  if (g.kind === 'task') { const t = state.tasks.find(x => x.id === g.ref); return t ? !!(t.done && t.doneDate === k) || !!g.done : !!g.done; }
+  return !!g.done;
+}
 function goalStreak() {
-  const g = state.dailyGoal || 2;
   let n = 0, d = new Date();
-  if (dayActions(dkey(d)) < g) d = addDays(d, -1);
-  while (dayActions(dkey(d)) >= g) { n++; d = addDays(d, -1); }
+  if (!goalDone(dkey(d))) d = addDays(d, -1);
+  while (goalDone(dkey(d))) { n++; d = addDays(d, -1); }
   return n;
 }
-function goalCard() {
-  const g = state.dailyGoal || 2, t = today(), n = dayActions(t), st = goalStreak();
-  const now = new Date(), mon = addDays(now, -((now.getDay() + 6) % 7));
+function goalName(g) {
+  if (!g) return '';
+  if (g.kind === 'act') { const a = actById(g.ref); return a ? a.name : g.text; }
+  if (g.kind === 'task') { const t = state.tasks.find(x => x.id === g.ref); return t ? t.text : g.text; }
+  return g.text;
+}
+function weekRow() {
+  const t = today(), now = new Date(), mon = addDays(now, -((now.getDay() + 6) % 7));
   const names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-  let week = '';
+  let html = '';
   for (let i = 0; i < 7; i++) {
-    const d = addDays(mon, i), k = dkey(d), a = dayActions(k);
-    const cls = (k > t ? 'fut' : a >= g ? 'met' : a > 0 ? 'part' : '') + (k === t ? ' today' : '');
-    week += `<div class="wd ${cls}"><span>${names[i]}</span><span class="dot">${a >= g ? ic('check', 16) : d.getDate()}</span></div>`;
+    const d = addDays(mon, i), k = dkey(d), ok = goalDone(k);
+    const cls = (k > t ? 'fut' : ok ? 'met' : goalOf(k) ? 'part' : '') + (k === t ? ' today' : '');
+    html += `<div class="wd ${cls}"><span>${names[i]}</span><span class="dot">${ok ? ic('check', 16) : d.getDate()}</span></div>`;
+  }
+  return `<div class="week">${html}</div>`;
+}
+function goalCard() {
+  const k = today(), g = goalOf(k), done = goalDone(k), st = goalStreak();
+  const si = stageOf(st), next = STAGES[si + 1];
+  const grow = next ? `${STAGES[si].name} · до стадии «${next.name}» ${days(next.from - st)}` : STAGES[si].name;
+  const streakHtml = `<div class="streak"><b>${st}</b><span>${plural(st, 'день', 'дня', 'дней')} подряд</span></div>`;
+  if (done) {
+    // дело дня сделано — персонаж с подсказкой уходит, остаётся короткая сводка
+    return `<div class="card goal">
+      <div class="row between"><div><div class="muted small">Дело дня сделано</div><div class="gdone">${ic('check', 18)} ${esc(goalName(g))}</div></div>${streakHtml}</div>
+      <div class="muted small" style="margin-top:8px">Росток: ${grow}</div>${weekRow()}</div>`;
+  }
+  const mood = new Date().getHours() >= 21 ? 'sleepy' : 'happy';
+  let bubble, acts = '';
+  if (!g) {
+    bubble = '<b>Какое дело сегодня главное?</b> Одно. Сделаешь его — день засчитан, и я подрасту.';
+    acts = `<button class="btn primary sm" data-goal-pick>${ic('flag', 14)} Выбрать дело дня</button>`;
+  } else {
+    bubble = `Дело дня: <b>${esc(goalName(g))}</b>. ${g.kind === 'act' ? 'Даже 15 минут засчитаются.' : 'Сделай — и день засчитан.'}`;
+    if (g.kind === 'act' && actById(g.ref)) acts = `<button class="btn primary sm" data-start="${g.ref}">${ic('play', 14)} Начать</button><button class="btn sm" data-log="${g.ref}">${ic('check', 14)} Сделала</button>`;
+    else acts = `<button class="btn primary sm" data-goal-done>${ic('check', 14)} Сделала</button>`;
+    acts += `<button class="linkbtn" data-goal-pick>сменить</button>`;
   }
   return `<div class="card goal">
-    <div class="row between">
-      <div><div class="muted small">Цель дня · ${g} ${plural(g, 'дело', 'дела', 'дел')}</div>
-        <div class="streak"><b>${st}</b><span>${plural(st, 'день', 'дня', 'дней')} подряд</span></div></div>
-      <button class="flame" data-goal-edit aria-label="Изменить цель">${ic('flame', 24)}</button>
-    </div>
-    <div class="goalbar"><i style="width:${Math.min(100, n / g * 100)}%"></i></div>
-    <div class="muted small" style="margin-top:6px">Сегодня ${Math.min(n, g)} из ${g}${n > g ? ` · и ещё ${n - g} сверху` : ''}</div>
-    <div class="week">${week}</div>
+    <div class="hero">${sprout(si, mood, 100)}<div class="bubble">${bubble}<div class="acts">${acts}</div></div></div>
+    <div style="margin-top:12px">${streakHtml}<div class="muted small">Росток: ${grow}</div></div>
+    ${weekRow()}
   </div>`;
 }
-function editGoal() {
-  const g = state.dailyGoal || 2;
+function pickGoal() {
+  const k = today(), cur = goalOf(k), y = goalOf(dkey(addDays(new Date(), -1)));
+  const open = todayTasks().filter(t => !t.done && t.q).slice(0, 8);
   openModal(`
-    <div class="center">${mascot('happy', 90)}</div>
-    <h2 class="center">Сколько в день — это уже победа?</h2>
-    <p class="center muted small">Считается любое занятие или выполненное дело из плана. Ставь меньше, чем кажется: серия важнее рекордов.</p>
-    <div class="pills" style="justify-content:center;margin-top:12px">${[1, 2, 3, 4, 5].map(v => `<button class="pill ${v === g ? 'on' : ''}" data-goal-set="${v}">${v}</button>`).join('')}</div>
-    <button class="btn ghost block" data-close style="margin-top:16px">Закрыть</button>`);
+    <h2>Дело дня</h2>
+    <p class="muted small">Одно главное дело. Сделаешь — день засчитан, серия растёт, а вместе с ней и росток.</p>
+    ${y && !cur ? `<button class="option" data-dg-same><span class="ico">${ic('refresh', 22)}</span><span><b>Как вчера: ${esc(goalName(y))}</b></span></button>` : ''}
+    <label>Занятие</label>
+    <div class="chips" style="flex-wrap:wrap">${liveActs().map(a => `<button class="chip" data-dg-act="${a.id}">${ic(a.icon, 15)}${esc(a.name)}</button>`).join('')}</div>
+    ${open.length ? `<label>Из плана на сегодня</label>${open.map(t => `<button class="option" data-dg-task="${t.id}"><span>${esc(t.text)}</span></button>`).join('')}` : ''}
+    <label>Своё</label>
+    <form class="row" id="dgForm"><input id="dgText" maxlength="80" aria-label="Своё дело дня"><button class="btn primary" type="submit">${ic('check', 18)}</button></form>
+    ${cur ? '<button class="btn ghost block" data-dg-clear style="margin-top:14px">Убрать дело дня</button>' : ''}
+    <button class="btn ghost block" data-close style="margin-top:8px">Закрыть</button>`);
 }
+function setGoal(g) {
+  state.dayGoals = { ...(state.dayGoals || {}), [today()]: g };
+  closeModal();
+  commit('Дело дня: ' + goalName(g));
+}
+
 const actById = id => state.acts.find(a => a.id === id);
 const liveActs = () => state.acts.filter(a => !a.archived);
 const siteUrl = () => location.href.split('?')[0].split('#')[0];
@@ -624,7 +686,7 @@ function renderTop() {
 }
 function openDrawer() {
   $('#drawer').innerHTML = `<div class="panel">
-    <div class="row" style="gap:12px;padding:0 6px 16px">${mascot('happy', 52)}<div><b style="font-size:21px">Росток</b>
+    <div class="row" style="gap:12px;padding:0 6px 16px"><span class="big-ic" style="margin:0;width:48px;height:48px">${ic('leaf', 26)}</span><div><b style="font-size:21px">Росток</b>
       <div class="muted small">${auth ? esc(auth.login) : 'без аккаунта'}</div></div></div>
     ${NAV.map(([tab, icon, name]) => `<button class="nav ${state.tab === tab ? 'on' : ''}" data-go="${tab}">${ic(icon, 24)}${name}</button>`).join('')}
     <div class="foot"><label>Тема</label><div class="seg">${[['auto', 'Авто'], ['dark', 'Тёмная'], ['light', 'Светлая']]
@@ -675,22 +737,14 @@ function viewPlan() {
   const doneToday = tt.filter(t => t.done).length;
   const inbox = tt.filter(t => !t.done && !t.q);
   const ns = nudges();
-  const g = state.dailyGoal || 2, nDone = dayActions(today());
-  const mood = nDone >= g ? 'proud' : nDone > 0 ? 'happy' : new Date().getHours() >= 21 ? 'sleepy' : 'happy';
-  const lead = ns[0];
-  const rest = ns.slice(1);
+  const rest = ns;
   const shown = showAllNudges ? rest : rest.slice(0, 2);
   const date = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
   let html = `
   <h1>${state.name ? `<span class="soft">${greeting().split(',')[0]},</span>${esc(state.name)}` : greeting()}</h1>
   <div class="muted small">${date}${doneToday ? ` · сделано ${doneToday}` : ''}</div>
-  <div class="hero">${mascot(mood, 108, 'bob')}
-    <div class="bubble">${lead ? lead.html : nDone >= g ? '<b>Цель дня выполнена.</b> Горжусь тобой. Дальше — только приятное.' : '<b>Всё из подсказок сделано.</b> Можно отдохнуть без вины.'}
-      ${lead && lead.aid ? `<div class="acts"><button class="btn primary sm" data-start="${lead.aid}">${ic('play', 14)} Начать</button>
-        ${lead.plan ? `<button class="btn sm" data-plan-act="${lead.aid}">${ic('calendar', 14)} В план</button>` : ''}</div>` : ''}
-    </div></div>
   ${goalCard()}
-  ${rest.length ? '<h2>Ещё на сегодня</h2>' : ''}`;
+  ${rest.length ? '<h2>Подсказки</h2>' : ''}`;
   for (const n of shown) {
     html += `<div class="card nudge ${n.cls || ''}"><div class="ico">${ic(n.icon)}</div><div>${n.html}
       ${n.aid ? `<div class="acts">
@@ -930,12 +984,11 @@ function viewHist() {
 function viewAccount() {
   if (!server.ok) {
     return `<h1>Аккаунт</h1>
-    <div class="hero">${mascot('sleepy', 100)}<div class="bubble">Аккаунт и синхронизация работают, когда Росток открыт <b>со своего сервера</b>. Сейчас он открыт с адреса без сервера${location.host ? ` (${esc(location.host)})` : ''}.</div></div>
+    <div class="card">Аккаунт и синхронизация работают, когда Росток открыт <b>со своего сервера</b>. Сейчас он открыт с адреса без сервера${location.host ? ` (${esc(location.host)})` : ''}.</div>
     <div class="card small"><p>Как поставить Росток на VPS — в файле <b>DEPLOY.md</b> в репозитории. После этого здесь можно будет войти, и отметки появятся на всех устройствах. Там же заработают уведомления.</p></div>`;
   }
   if (!auth) {
     return `<h1><span class="soft">Один Росток —</span>на всех устройствах</h1>
-    <div class="center" style="margin:10px 0">${mascot('happy', 110, 'bob')}</div>
     <form id="authForm" class="card">
       <label for="lgn">Логин</label><input id="lgn" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="32">
       <label for="pwd">Пароль</label><input id="pwd" name="password" type="password" autocomplete="current-password" required minlength="8">
@@ -947,9 +1000,9 @@ function viewAccount() {
   const ps = pushState();
   const pushHtml = {
     on: `<span class="status ok">${ic('check', 14)} Включены на этом устройстве</span>
-      <p>Пока идёт таймер, каждые 30 минут придёт: «Как успехи? Продолжаешь?»</p>
+      <p>Пока идёт таймер, каждые ${state.timerEvery || 30} мин придёт: «Как успехи? Продолжаешь?» Интервал — в «Настройках».</p>
       <button class="btn block" data-push-test>Прислать тестовое</button>`,
-    off: `<p>Пока идёт таймер, каждые 30 минут спрошу: «Как успехи? Продолжаешь?» — даже если Росток закрыт.</p>
+    off: `<p>Пока идёт таймер, каждые ${state.timerEvery || 30} мин спрошу: «Как успехи? Продолжаешь?» — даже если Росток закрыт.</p>
       <button class="btn primary block" data-push-on>${ic('bell', 16)} Включить уведомления</button>`,
     install: `<p><b>На iPhone уведомления приходят только Ростку, добавленному на экран «Домой».</b></p>
       <ol class="steps"><li>Открой этот адрес в Safari.</li><li><b>Поделиться → На экран «Домой»</b>. Если есть переключатель «Открывать как веб-приложение» — включи его.</li>
@@ -959,9 +1012,9 @@ function viewAccount() {
     noserver: `<p>На сервере не установлен модуль уведомлений (<code>npm install</code> в папке server).</p>`,
   }[ps];
   return `<h1>Аккаунт</h1>
-  <div class="hero">${mascot('happy', 96)}<div class="bubble"><b>${esc(auth.login)}</b><br>
-    <span class="muted small">${lastSyncOk ? 'Синхронизировано в ' + hm(new Date(lastSyncOk)) : syncing ? 'Синхронизирую…' : 'Ещё не синхронизировалось'}</span>
-    <div class="acts"><button class="btn sm" data-sync-now>${ic('refresh', 14)} Обновить</button></div></div></div>
+  <div class="card"><div class="row between"><div><b>${esc(auth.login)}</b><br>
+    <span class="muted small">${lastSyncOk ? 'Синхронизировано в ' + hm(new Date(lastSyncOk)) : syncing ? 'Синхронизирую…' : 'Ещё не синхронизировалось'}</span></div>
+    <button class="btn sm" data-sync-now>${ic('refresh', 14)} Обновить</button></div></div>
   <div class="card small"><p>Заходи под этим логином на телефоне и на компьютере — отметки, занятия и план будут одинаковыми везде. Обновляется само при каждом изменении и раз в минуту.</p></div>
   <h2>Уведомления</h2>
   <div class="card small">${pushHtml}</div>
@@ -1029,6 +1082,8 @@ function viewMore() {
 
   <h2>Таймер</h2>
   <div class="card small">
+    <label style="margin-top:0">Спрашивать «как успехи?» каждые</label>
+    <div class="pills" style="margin-bottom:14px">${[[2, '2 мин · проверка'], [15, '15 мин'], [30, '30 мин'], [60, '1 час']].map(([v, n]) => `<button class="pill ${(state.timerEvery || 30) === v ? 'on' : ''}" data-every="${v}">${n}</button>`).join('')}</div>
     <div class="switch"><span>Запасной вариант: если уведомления Ростка выключены, предлагать событие в Календаре</span><input type="checkbox" id="timerAlerts" ${state.timerAlerts ? 'checked' : ''}></div>
     <p class="muted" style="margin-top:8px">${pushState() === 'on' ? 'Сейчас уведомления Ростка включены — Календарь не нужен.' : 'При запуске таймера iPhone предложит добавить событие с уведомлениями каждые полчаса. Нажми «Добавить», иначе уведомлений не будет. Лучше включить уведомления Ростка в «Аккаунте».'}</p>
   </div>
@@ -1094,7 +1149,7 @@ function startTimer(aid) {
     // событие в Календаре на 3 часа с уведомлениями каждые 30 минут
     openIcs([icsEvent({
       title: `Росток: ${a.name}`, date: today(), time: hm(new Date()), dur: 180,
-      alarms: [30, 60, 90, 120, 150, 180],
+      alarms: [1, 2, 3, 4, 5, 6].map(i => i * (state.timerEvery || 30)),
       alarmText: `Как успехи с «${a.name}»? Продолжаешь? Если закончила — отметь в Ростке.`,
     })], 'rostok-timer.ics');
   }
@@ -1102,7 +1157,7 @@ function startTimer(aid) {
 function timerCheckIn() {
   if (!state.timer) return false;
   const min = Math.floor((Date.now() - state.timer.start) / 60000);
-  const marks = Math.floor(min / 30);
+  const marks = Math.floor(min / (state.timerEvery || 30));
   if (marks <= (state.timer.checked || 0)) return false;
   state.timer.checked = marks; save();
   const a = actById(state.timer.aid);
@@ -1154,6 +1209,8 @@ function logSession(aid, min, taskId) {
 // ---------- дела ----------
 function completeTask(t, silent) {
   t.done = true; t.doneDate = today();
+  const g = goalOf(today());
+  if (g && g.kind === 'task' && g.ref === t.id) state.dayGoals = { ...state.dayGoals, [today()]: { ...g, done: true } };
   state.doneLog[today()] = (state.doneLog[today()] || 0) + 1;
   navigator.vibrate?.(20);
   if (t.src === 'rem' && state.writeBack) { save(); runShortcut(state.doneShortcut, t.text); return; }
@@ -1283,8 +1340,9 @@ function editAct(id) {
 }
 function showWelcome() {
   openModal(`
-    <div class="center">${mascot('happy', 120, 'bob')}</div>
+    <div class="center">${sprout(1, 'happy', 110)}</div>
     <h2 class="center">Привет, я Росток</h2>
+    <p class="center muted small">Каждый день выбираешь одно дело дня. Делаешь его — я расту: от семечка до цветка.</p>
     <p><b>План дня</b> — матрица Эйзенхауэра или расписание. Поиск работы и хобби живут в квадрате «Важно, не срочно»: его обычно съедают все остальные.</p>
     <p><b>Каждый день подскажу</b> найти время на поиск работы, прогуляться, вернуться к хобби, которое давно забросила, — и покажу, сколько времени ты уже вложила.</p>
     <p><b>Напоминания</b> приходят из твоего Календаря, а дела из Напоминаний подтягиваются сюда. Как это настроить — во вкладке «Ещё».</p>
@@ -1351,8 +1409,18 @@ document.addEventListener('click', e => {
   if (ds.go) { state.tab = ds.go; closeDrawer(); save(); render(); window.scrollTo(0, 0); return; }
   if (ds.themeSet) { setTheme(ds.themeSet); openDrawer(); render(); return; }
   if ('themeToggle' in ds) { setTheme(curTheme() === 'dark' ? 'light' : 'dark'); render(); return; }
-  if ('goalEdit' in ds) return editGoal();
-  if (ds.goalSet) { state.dailyGoal = +ds.goalSet; closeModal(); commit('Цель дня: ' + ds.goalSet); return; }
+  if ('goalPick' in ds) return pickGoal();
+  if (ds.dgAct) { const a = actById(ds.dgAct); return setGoal({ kind: 'act', ref: a.id, text: a.name }); }
+  if (ds.dgTask) { const t = state.tasks.find(x => x.id === ds.dgTask); return setGoal({ kind: 'task', ref: t.id, text: t.text }); }
+  if ('dgSame' in ds) { const y = goalOf(dkey(addDays(new Date(), -1))); return setGoal({ ...y, done: false }); }
+  if ('dgClear' in ds) { const m = { ...state.dayGoals }; delete m[today()]; state.dayGoals = m; closeModal(); commit(); return; }
+  if ('goalDone' in ds) {
+    const g = goalOf(today());
+    if (g && g.kind === 'task') { const t = state.tasks.find(x => x.id === g.ref); if (t && !t.done) { completeTask(t, true); } }
+    state.dayGoals = { ...state.dayGoals, [today()]: { ...g, done: true } };
+    commit('Дело дня сделано. Росток растёт'); return;
+  }
+  if (ds.every) { state.timerEvery = +ds.every; commit(ds.every === '2' ? 'Проверка: спрошу через 2 минуты таймера' : 'Сохранено'); return; }
   if ('register' in ds) {
     const f = $('#authForm');
     if (!f.reportValidity()) return;
@@ -1435,6 +1503,12 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('submit', e => {
+  if (e.target.id === 'dgForm') {
+    e.preventDefault();
+    const v = $('#dgText').value.trim();
+    if (v) setGoal({ kind: 'text', ref: '', text: v });
+    return;
+  }
   if (e.target.id === 'authForm') {
     e.preventDefault();
     doAuth('login', e.target.login.value.trim(), e.target.password.value);

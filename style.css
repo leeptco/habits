@@ -273,3 +273,17 @@ details summary { cursor: pointer; font-weight: 650; padding: 4px 0; }
 code { background: var(--card2); padding: 1px 6px; border-radius: 6px; font-size: 13px; word-break: break-all; }
 .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--card2); }
 .status.ok { color: var(--accent); }
+
+/* дело дня */
+.goal .hero { margin: 0; grid-template-columns: 100px 1fr; }
+.goal .bubble { background: color-mix(in srgb, var(--ink-text) 8%, transparent); color: inherit; box-shadow: none; }
+.goal .bubble::before { background: color-mix(in srgb, var(--ink-text) 8%, transparent); }
+.goal .bubble .btn.primary { background: var(--accent); color: var(--accent-ink); }
+.goal .bubble .btn:not(.primary) { background: color-mix(in srgb, var(--ink-text) 12%, transparent); color: inherit; }
+.goal .linkbtn { color: inherit; opacity: .6; }
+.goal .gdone { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 700; margin-top: 2px; }
+.goal .gdone .ic { color: var(--accent); }
+.goal .streak b { font-size: 36px; }
+.sprout { display: block; animation: bob 4s ease-in-out infinite; filter: drop-shadow(0 12px 18px rgba(70, 100, 255, .25)); }
+@media (prefers-reduced-motion: reduce) { .sprout { animation: none; } }
+.goal .streak span { white-space: nowrap; }

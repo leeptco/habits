@@ -20,8 +20,7 @@ const HOST = process.env.HOST || '127.0.0.1';
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const MAX_BODY = 8 * 1024 * 1024;
-const TIMER_EVERY = 30 * 60 * 1000;      // «как успехи?» каждые 30 минут
-const TIMER_MAX_MARKS = 12;              // не дольше 6 часов
+const TIMER_MAX_MS = 6 * 3600 * 1000;    // спрашиваем не дольше 6 часов
 
 fs.mkdirSync(DATA, { recursive: true, mode: 0o700 });
 
@@ -105,9 +104,11 @@ setInterval(() => {
   for (const [uid, st] of Object.entries(states)) {
     const timer = st.data && st.data.timer;
     if (!timer || !timer.start) continue;
-    const key = `${uid}:${timer.start}`;
-    const marks = Math.floor((now - timer.start) / TIMER_EVERY);
-    if (marks < 1 || marks > TIMER_MAX_MARKS || marks <= (notified.get(key) || 0)) continue;
+    // интервал задаётся в «Настройках» Ростка: 2 (проверка), 15, 30 или 60 минут
+    const every = Math.min(240, Math.max(2, +st.data.timerEvery || 30)) * 60 * 1000;
+    const key = `${uid}:${timer.start}:${every}`;
+    const marks = Math.floor((now - timer.start) / every);
+    if (marks < 1 || marks * every > TIMER_MAX_MS || marks <= (notified.get(key) || 0)) continue;
     notified.set(key, marks);
     const act = (st.data.acts || []).find(a => a.id === timer.aid);
     const name = act ? act.name : 'занятием';
