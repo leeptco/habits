@@ -74,9 +74,16 @@ const ICONS = {
   chevronDown: '<path d="M6 9l6 6 6-6"/>',
   chevronUp: '<path d="M6 15l6-6 6 6"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h10"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+  flame: '<path d="M12 22c4.4 0 7-2.9 7-6.6 0-3.6-2.3-5.6-3.6-8.4-.9 1.7-2 2.6-3.4 2.9.2-2.6-.8-5-3-6.9.2 3.8-4 6.3-4 10.5C5 19.1 7.6 22 12 22z"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+  logout: '<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
   timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/>',
 };
 const ic = (name, size = 20) => `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.star}</svg>`;
+const ACT_COLORS = ['#8ea6ff', '#f49ac1', '#c6e66b', '#f2c46d', '#7fd8c8', '#c9a0ff', '#ff9f7a', '#9fd3ff'];
+const actColor = a => a.color || ACT_COLORS[Math.max(0, state.acts.indexOf(a)) % ACT_COLORS.length];
 const ACT_ICONS = ['briefcase', 'film', 'yarn', 'walk', 'book', 'sun', 'dumbbell', 'languages', 'camera', 'music', 'palette', 'pen', 'cup', 'home', 'leaf', 'heart', 'activity', 'star'];
 
 // ---------- справочники ----------
@@ -134,6 +141,7 @@ function defaultState() {
     doneLog: {},     // {дата: сколько дел отмечено}
     histFilter: '',
     timerAlerts: true,
+    dailyGoal: 2,     // сколько дел/занятий в день — это «день засчитан»
   };
 }
 let state = load();
@@ -157,8 +165,256 @@ function load() {
   s.version = 5;
   return s;
 }
-function save() {
+function persist() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { toast('Не получилось сохранить'); }
+}
+function save() { stamp(); persist(); scheduleSync(); }
+
+// ---------- аккаунт и синхронизация между устройствами ----------
+// Каждая запись получает отметку времени изменения (u). При обмене с сервером
+// для каждой записи побеждает более свежая версия, удаления помнятся (del).
+const AUTH_KEY = 'rostok-auth';
+const COLLS = ['acts', 'sessions', 'tasks', 'wins', 'insta'];
+const MAPS = ['doneLog', 'remQuad'];
+const SCALARS = ['name', 'writeBack', 'doneShortcut', 'syncShortcut', 'timerAlerts', 'lastSync', 'events', 'timer', 'dailyGoal'];
+let auth = (() => { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch (e) { return null; } })();
+let server = { ok: false, push: false };
+let snap = null, lastSyncOk = null, syncing = false, syncAgain = false, syncTimer = null;
+function saveAuth() { try { auth ? localStorage.setItem(AUTH_KEY, JSON.stringify(auth)) : localStorage.removeItem(AUTH_KEY); } catch (e) { /* приватный режим */ } }
+function ensureMeta(x) {
+  x.del = x.del || {}; x.mu = x.mu || {}; x.su = x.su || {};
+  for (const i of x.insta || []) if (!i.id) i.id = 'i' + i.at;
+}
+function takeSnap() {
+  ensureMeta(state);
+  const m = {};
+  for (const c of COLLS) for (const e of state[c]) { const { u, ...r } = e; m[c + ':' + e.id] = JSON.stringify(r); }
+  for (const k of MAPS) for (const [kk, v] of Object.entries(state[k] || {})) m['m:' + k + ':' + kk] = JSON.stringify(v);
+  for (const k of SCALARS) m['s:' + k] = JSON.stringify(state[k] ?? null);
+  snap = m;
+}
+function stamp() {
+  if (!snap) takeSnap();
+  ensureMeta(state);
+  const now = Date.now(), seen = new Set();
+  for (const c of COLLS) for (const e of state[c]) {
+    const key = c + ':' + e.id; seen.add(key);
+    const { u, ...r } = e; const j = JSON.stringify(r);
+    if (snap[key] !== j) { e.u = now; snap[key] = j; }
+  }
+  for (const key of Object.keys(snap)) {
+    if (key.startsWith('m:') || key.startsWith('s:') || seen.has(key)) continue;
+    state.del[key] = now; delete snap[key];
+  }
+  for (const k of MAPS) for (const [kk, v] of Object.entries(state[k] || {})) {
+    const key = 'm:' + k + ':' + kk, j = JSON.stringify(v);
+    if (snap[key] !== j) { state.mu[k + ':' + kk] = now; snap[key] = j; }
+  }
+  for (const k of SCALARS) {
+    const key = 's:' + k, j = JSON.stringify(state[k] ?? null);
+    if (snap[key] !== j) { state.su[k] = now; snap[key] = j; }
+  }
+}
+function syncData(x) {
+  const o = { del: x.del || {}, mu: x.mu || {}, su: x.su || {} };
+  for (const k of [...COLLS, ...MAPS, ...SCALARS]) o[k] = x[k];
+  return o;
+}
+function mergeSync(a, b, preferB = false) {
+  const out = { del: { ...(a.del || {}) }, mu: {}, su: {} };
+  for (const [k, v] of Object.entries(b.del || {})) out.del[k] = Math.max(out.del[k] || 0, v);
+  const old = Date.now() - 120 * 86400e3; // старые отметки об удалении больше не нужны
+  for (const k of Object.keys(out.del)) if (out.del[k] < old) delete out.del[k];
+  for (const c of COLLS) {
+    const m = new Map();
+    for (const e of a[c] || []) m.set(e.id, e);
+    for (const e of b[c] || []) { const x = m.get(e.id); if (!x || (e.u || 0) > (x.u || 0) || (preferB && (e.u || 0) === (x.u || 0))) m.set(e.id, e); }
+    out[c] = [...m.values()].filter(e => { const d = out.del[c + ':' + e.id]; return !(d && d >= (e.u || 0)); });
+  }
+  for (const k of MAPS) {
+    out[k] = {};
+    const keys = new Set([...Object.keys(a[k] || {}), ...Object.keys(b[k] || {})]);
+    for (const kk of keys) {
+      const ta = (a.mu || {})[k + ':' + kk] || 0, tb = (b.mu || {})[k + ':' + kk] || 0;
+      const [win, lose] = tb > ta || (preferB && tb === ta) ? [b, a] : [a, b];
+      const v = (win[k] || {})[kk] !== undefined ? win[k][kk] : (lose[k] || {})[kk];
+      out[k][kk] = v;
+      if (ta || tb) out.mu[k + ':' + kk] = Math.max(ta, tb);
+    }
+  }
+  for (const k of SCALARS) {
+    const ta = (a.su || {})[k] || 0, tb = (b.su || {})[k] || 0;
+    out[k] = (tb > ta || (preferB && tb === ta && b[k] !== undefined)) ? b[k] : (a[k] !== undefined ? a[k] : b[k]);
+    if (ta || tb) out.su[k] = Math.max(ta, tb);
+  }
+  return out;
+}
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (auth) headers.Authorization = 'Bearer ' + auth.token;
+  const res = await fetch('api/' + path, { method: opts.method || 'GET', headers, body: opts.body ? JSON.stringify(opts.body) : undefined, cache: 'no-store' });
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* пустой ответ */ }
+  if (res.status === 401 && auth && !opts.public) { auth = null; saveAuth(); toast('Нужно войти снова'); render(); }
+  return { ok: res.ok, status: res.status, data };
+}
+function markSynced() { if (auth && !auth.synced) { auth.synced = true; saveAuth(); } }
+function scheduleSync() {
+  if (!auth || !server.ok) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(sync, 1200);
+}
+async function sync() {
+  if (!auth || !server.ok) return;
+  if (syncing) { syncAgain = true; return; }
+  syncing = true;
+  try {
+    stamp(); persist();
+    for (let i = 0; i < 4; i++) {
+      const r = await api('state');
+      if (!r.ok) break;
+      const remote = r.data.data || {};
+      const before = JSON.stringify(syncData(state));
+      // пока устройство ни разу не синхронизировалось, при равенстве верим аккаунту, а не значениям по умолчанию
+      const merged = mergeSync(syncData(state), remote, !auth.synced);
+      const mergedStr = JSON.stringify(merged);
+      if (mergedStr !== before) { Object.assign(state, merged); takeSnap(); persist(); softRender(); }
+      if (mergedStr === JSON.stringify(remote)) { lastSyncOk = Date.now(); markSynced(); break; }
+      const w = await api('state', { method: 'PUT', body: { rev: r.data.rev, data: merged } });
+      if (w.ok) { lastSyncOk = Date.now(); markSynced(); break; }
+      if (w.status !== 409) break; // 409 — кто-то записал раньше: забираем ещё раз и сливаем
+    }
+  } catch (e) { /* нет сети — попробуем позже */ }
+  syncing = false;
+  if (state.tab === 'account') softRender();
+  if (syncAgain) { syncAgain = false; sync(); }
+}
+// перерисовать, но не мешать, если человек сейчас печатает
+function softRender() {
+  const a = document.activeElement;
+  if (a && a.closest && a.closest('#screen') && /INPUT|SELECT|TEXTAREA/.test(a.tagName)) return;
+  render();
+}
+async function doAuth(mode, login, password) {
+  const r = await api(mode, { method: 'POST', body: { login, password }, public: true });
+  if (!r.ok) { toast((r.data && r.data.error) || 'Не получилось. Проверь интернет.'); return; }
+  auth = { token: r.data.token, login: r.data.login };
+  saveAuth();
+  state.onboarded = true; persist();
+  await sync();
+  render();
+  toast(mode === 'register' ? 'Аккаунт создан. Данные этого устройства уже в нём' : 'С возвращением! Данные подтянулись');
+}
+
+// ---------- уведомления (push) ----------
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+function pushState() {
+  if (!server.push) return 'noserver';
+  if (isIOS() && !isStandalone()) return 'install';
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  let flag = null;
+  try { flag = localStorage.getItem('rostok-push'); } catch (e) { /* ничего */ }
+  if (Notification.permission === 'granted' && auth && flag === auth.login) return 'on';
+  return 'off';
+}
+function b64ToBytes(b64) {
+  const s = (b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+async function enablePush() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Уведомления не разрешены'); render(); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const k = await api('push/key');
+    if (!k.ok || !k.data.key) { toast('Сервер не настроен для уведомлений'); return; }
+    const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(k.data.key) }));
+    const r = await api('push/subscribe', { method: 'POST', body: { subscription: sub.toJSON() } });
+    if (!r.ok) { toast('Не получилось включить'); return; }
+    try { localStorage.setItem('rostok-push', auth.login); } catch (e) { /* ничего */ }
+    toast('Уведомления включены');
+    render();
+  } catch (e) { toast('Не получилось включить уведомления'); }
+}
+
+// ---------- тема ----------
+const themePref = () => { try { return localStorage.getItem('rostok-theme') || 'auto'; } catch (e) { return 'auto'; } };
+const curTheme = () => document.documentElement.dataset.theme || 'dark';
+function applyTheme(pref = themePref()) {
+  const t = pref === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
+  document.documentElement.dataset.theme = t;
+  $('meta[name="theme-color"]').setAttribute('content', t === 'light' ? '#f3f3f0' : '#0c0e18');
+}
+function setTheme(pref) { try { localStorage.setItem('rostok-theme', pref); } catch (e) { /* ничего */ } applyTheme(pref); }
+
+// ---------- персонаж ----------
+let mascotN = 0;
+function mascot(mood = 'happy', size = 110, cls = '') {
+  const n = ++mascotN;
+  const dark = '#151a33';
+  const eyes = mood === 'proud'
+    ? `<path d="M36 55q9-10 18 0M66 55q9-10 18 0" stroke="${dark}" stroke-width="4" fill="none" stroke-linecap="round"/>`
+    : `<ellipse cx="45" cy="54" rx="11" ry="12.5" fill="#fff"/><ellipse cx="75" cy="54" rx="11" ry="12.5" fill="#fff"/>
+       <circle cx="${mood === 'sleepy' ? 46 : 47}" cy="${mood === 'sleepy' ? 59 : 56}" r="5.2" fill="${dark}"/><circle cx="${mood === 'sleepy' ? 76 : 77}" cy="${mood === 'sleepy' ? 59 : 56}" r="5.2" fill="${dark}"/>
+       ${mood === 'sleepy' ? `<path d="M33.5 54a11.5 12.5 0 0 1 23 0zM63.5 54a11.5 12.5 0 0 1 23 0z" fill="url(#lid${n})"/>` : ''}`;
+  const mouth = mood === 'sleepy'
+    ? `<path d="M54 79q6 3 12 0" stroke="${dark}" stroke-width="3.2" fill="none" stroke-linecap="round"/>`
+    : `<path d="M50 75q10 ${mood === 'proud' ? 12 : 9} 20 0" stroke="${dark}" stroke-width="3.6" fill="none" stroke-linecap="round"/>`;
+  return `<svg class="mascot ${cls}" width="${size}" height="${Math.round(size * 1.12)}" viewBox="0 0 120 134" aria-hidden="true">
+    <defs>
+      <radialGradient id="mg${n}" cx="38%" cy="30%" r="75%"><stop offset="0" stop-color="#f3f5ff"/><stop offset=".42" stop-color="#a9baff"/><stop offset="1" stop-color="#5672f0"/></radialGradient>
+      <linearGradient id="lid${n}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8ea2fb"/><stop offset="1" stop-color="#7b92f6"/></linearGradient>
+      <filter id="mb${n}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4"/></filter>
+    </defs>
+    <ellipse cx="60" cy="128" rx="30" ry="4.5" fill="#5672f0" opacity=".25"/>
+    <path d="M46 100v22M74 100v22" stroke="#6f87f3" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="60" cy="58" r="46" fill="url(#mg${n})" filter="url(#mb${n})" opacity=".7"/>
+    <circle cx="60" cy="58" r="43" fill="url(#mg${n})"/>
+    ${eyes}${mouth}
+    ${mood === 'proud' ? '<circle cx="34" cy="70" r="5" fill="#ff9fb8" opacity=".6"/><circle cx="86" cy="70" r="5" fill="#ff9fb8" opacity=".6"/>' : ''}
+  </svg>`;
+}
+
+// ---------- цель дня и серия ----------
+const dayActions = k => state.sessions.filter(x => x.date === k).length + ((state.doneLog || {})[k] || 0);
+function goalStreak() {
+  const g = state.dailyGoal || 2;
+  let n = 0, d = new Date();
+  if (dayActions(dkey(d)) < g) d = addDays(d, -1);
+  while (dayActions(dkey(d)) >= g) { n++; d = addDays(d, -1); }
+  return n;
+}
+function goalCard() {
+  const g = state.dailyGoal || 2, t = today(), n = dayActions(t), st = goalStreak();
+  const now = new Date(), mon = addDays(now, -((now.getDay() + 6) % 7));
+  const names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+  let week = '';
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(mon, i), k = dkey(d), a = dayActions(k);
+    const cls = (k > t ? 'fut' : a >= g ? 'met' : a > 0 ? 'part' : '') + (k === t ? ' today' : '');
+    week += `<div class="wd ${cls}"><span>${names[i]}</span><span class="dot">${a >= g ? ic('check', 16) : d.getDate()}</span></div>`;
+  }
+  return `<div class="card goal">
+    <div class="row between">
+      <div><div class="muted small">Цель дня · ${g} ${plural(g, 'дело', 'дела', 'дел')}</div>
+        <div class="streak"><b>${st}</b><span>${plural(st, 'день', 'дня', 'дней')} подряд</span></div></div>
+      <button class="flame" data-goal-edit aria-label="Изменить цель">${ic('flame', 24)}</button>
+    </div>
+    <div class="goalbar"><i style="width:${Math.min(100, n / g * 100)}%"></i></div>
+    <div class="muted small" style="margin-top:6px">Сегодня ${Math.min(n, g)} из ${g}${n > g ? ` · и ещё ${n - g} сверху` : ''}</div>
+    <div class="week">${week}</div>
+  </div>`;
+}
+function editGoal() {
+  const g = state.dailyGoal || 2;
+  openModal(`
+    <div class="center">${mascot('happy', 90)}</div>
+    <h2 class="center">Сколько в день — это уже победа?</h2>
+    <p class="center muted small">Считается любое занятие или выполненное дело из плана. Ставь меньше, чем кажется: серия важнее рекордов.</p>
+    <div class="pills" style="justify-content:center;margin-top:12px">${[1, 2, 3, 4, 5].map(v => `<button class="pill ${v === g ? 'on' : ''}" data-goal-set="${v}">${v}</button>`).join('')}</div>
+    <button class="btn ghost block" data-close style="margin-top:16px">Закрыть</button>`);
 }
 const actById = id => state.acts.find(a => a.id === id);
 const liveActs = () => state.acts.filter(a => !a.archived);
@@ -359,14 +615,30 @@ $('#modal').addEventListener('click', e => {
 });
 
 // ---------- навигация и отрисовка ----------
-$$('.tabs button').forEach(b => {
-  b.innerHTML = ic(b.dataset.icon, 24) + b.textContent;
-  b.addEventListener('click', () => { state.tab = b.dataset.tab; save(); render(); window.scrollTo(0, 0); });
-});
+const NAV = [['plan', 'sun', 'Сегодня'], ['acts', 'activity', 'Занятия'], ['hist', 'grid', 'История'], ['account', 'user', 'Аккаунт'], ['more', 'sliders', 'Настройки']];
+function renderTop() {
+  const title = (NAV.find(n => n[0] === state.tab) || NAV[0])[2];
+  $('#topbar').innerHTML = `<button data-menu aria-label="Меню">${ic('menu', 24)}</button>
+    <span class="ttl" aria-label="${title}"></span>
+    <button data-theme-toggle aria-label="Сменить тему">${ic(curTheme() === 'dark' ? 'sun' : 'moon', 22)}</button>`;
+}
+function openDrawer() {
+  $('#drawer').innerHTML = `<div class="panel">
+    <div class="row" style="gap:12px;padding:0 6px 16px">${mascot('happy', 52)}<div><b style="font-size:21px">Росток</b>
+      <div class="muted small">${auth ? esc(auth.login) : 'без аккаунта'}</div></div></div>
+    ${NAV.map(([tab, icon, name]) => `<button class="nav ${state.tab === tab ? 'on' : ''}" data-go="${tab}">${ic(icon, 24)}${name}</button>`).join('')}
+    <div class="foot"><label>Тема</label><div class="seg">${[['auto', 'Авто'], ['dark', 'Тёмная'], ['light', 'Светлая']]
+      .map(([k, n]) => `<button class="${themePref() === k ? 'on' : ''}" data-theme-set="${k}">${n}</button>`).join('')}</div></div>
+  </div>`;
+  $('#drawer').classList.remove('hidden');
+}
+const closeDrawer = () => $('#drawer').classList.add('hidden');
+$('#drawer').addEventListener('click', e => { if (e.target.id === 'drawer') closeDrawer(); });
 function render() {
-  $$('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === state.tab));
-  const views = { plan: viewPlan, acts: viewActs, hist: viewHist, more: viewMore };
-  $('#screen').innerHTML = (views[state.tab] || viewPlan)();
+  const views = { plan: viewPlan, acts: viewActs, hist: viewHist, more: viewMore, account: viewAccount };
+  if (!views[state.tab]) state.tab = 'plan';
+  renderTop();
+  $('#screen').innerHTML = views[state.tab]();
   renderTimer();
 }
 function commit(msg) { save(); render(); if (msg) toast(msg); }
@@ -403,20 +675,30 @@ function viewPlan() {
   const doneToday = tt.filter(t => t.done).length;
   const inbox = tt.filter(t => !t.done && !t.q);
   const ns = nudges();
-  const shown = showAllNudges ? ns : ns.slice(0, 2);
+  const g = state.dailyGoal || 2, nDone = dayActions(today());
+  const mood = nDone >= g ? 'proud' : nDone > 0 ? 'happy' : new Date().getHours() >= 21 ? 'sleepy' : 'happy';
+  const lead = ns[0];
+  const rest = ns.slice(1);
+  const shown = showAllNudges ? rest : rest.slice(0, 2);
+  const date = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
   let html = `
-  <h1>${greeting()}</h1>
-  <div class="muted small">${new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}${doneToday ? ` · сделано ${doneToday}` : ''}</div>
-  <h2>На сегодня</h2>`;
-  if (!ns.length) html += `<div class="card soft small">${ic('check', 16)} Всё из подсказок на сегодня сделано. Можно отдохнуть без вины.</div>`;
+  <h1>${state.name ? `<span class="soft">${greeting().split(',')[0]},</span>${esc(state.name)}` : greeting()}</h1>
+  <div class="muted small">${date}${doneToday ? ` · сделано ${doneToday}` : ''}</div>
+  <div class="hero">${mascot(mood, 108, 'bob')}
+    <div class="bubble">${lead ? lead.html : nDone >= g ? '<b>Цель дня выполнена.</b> Горжусь тобой. Дальше — только приятное.' : '<b>Всё из подсказок сделано.</b> Можно отдохнуть без вины.'}
+      ${lead && lead.aid ? `<div class="acts"><button class="btn primary sm" data-start="${lead.aid}">${ic('play', 14)} Начать</button>
+        ${lead.plan ? `<button class="btn sm" data-plan-act="${lead.aid}">${ic('calendar', 14)} В план</button>` : ''}</div>` : ''}
+    </div></div>
+  ${goalCard()}
+  ${rest.length ? '<h2>Ещё на сегодня</h2>' : ''}`;
   for (const n of shown) {
     html += `<div class="card nudge ${n.cls || ''}"><div class="ico">${ic(n.icon)}</div><div>${n.html}
       ${n.aid ? `<div class="acts">
         <button class="btn primary sm" data-start="${n.aid}">${ic('play', 14)} Начать</button>
-        ${n.plan ? `<button class="btn sm" data-plan-act="${n.aid}">${ic('calendar', 14)} Запланировать</button>` : ''}
+        ${n.plan ? `<button class="btn sm" data-plan-act="${n.aid}">${ic('calendar', 14)} В план</button>` : ''}
       </div>` : ''}</div></div>`;
   }
-  if (ns.length > 2) html += `<button class="more-link" data-more-nudges>${showAllNudges ? 'Свернуть' : `Ещё ${ns.length - 2}`}</button>`;
+  if (rest.length > 2) html += `<button class="more-link" data-more-nudges>${showAllNudges ? 'Свернуть' : `Ещё ${rest.length - 2}`}</button>`;
 
   if (state.lastSync || state.tasks.some(t => t.src === 'rem')) {
     html += `<div class="row between small muted" style="margin-top:14px">
@@ -534,7 +816,7 @@ function viewActs() {
   let html = `<h1>Занятия</h1>`;
   for (const { a, s } of stats) {
     const sinceTxt = s.since === null ? 'ещё не было' : s.since === 0 ? 'сегодня' : s.since === 1 ? 'вчера' : `${days(s.since)} назад`;
-    html += `<div class="card act">
+    html += `<div class="card act" style="--c:${actColor(a)}">
       <div class="ico">${ic(a.icon, 22)}</div>
       <div><b>${esc(a.name)}</b>
         <div class="nums">${s.total ? fmtMin(s.total) + ' · ' : ''}<span class="${s.since >= 5 ? 'warn' : ''}">${sinceTxt}</span></div></div>
@@ -644,15 +926,57 @@ function viewHist() {
   return html;
 }
 
+// ---------- экран «Аккаунт» ----------
+function viewAccount() {
+  if (!server.ok) {
+    return `<h1>Аккаунт</h1>
+    <div class="hero">${mascot('sleepy', 100)}<div class="bubble">Аккаунт и синхронизация работают, когда Росток открыт <b>со своего сервера</b>. Сейчас он открыт с адреса без сервера${location.host ? ` (${esc(location.host)})` : ''}.</div></div>
+    <div class="card small"><p>Как поставить Росток на VPS — в файле <b>DEPLOY.md</b> в репозитории. После этого здесь можно будет войти, и отметки появятся на всех устройствах. Там же заработают уведомления.</p></div>`;
+  }
+  if (!auth) {
+    return `<h1><span class="soft">Один Росток —</span>на всех устройствах</h1>
+    <div class="center" style="margin:10px 0">${mascot('happy', 110, 'bob')}</div>
+    <form id="authForm" class="card">
+      <label for="lgn">Логин</label><input id="lgn" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="32">
+      <label for="pwd">Пароль</label><input id="pwd" name="password" type="password" autocomplete="current-password" required minlength="8">
+      <button class="btn primary block" type="submit" style="margin-top:16px">Войти</button>
+      <button class="btn block" type="button" data-register>Создать аккаунт</button>
+    </form>
+    <p class="muted small center">Всё, что уже есть на этом устройстве, сохранится и попадёт в аккаунт.</p>`;
+  }
+  const ps = pushState();
+  const pushHtml = {
+    on: `<span class="status ok">${ic('check', 14)} Включены на этом устройстве</span>
+      <p>Пока идёт таймер, каждые 30 минут придёт: «Как успехи? Продолжаешь?»</p>
+      <button class="btn block" data-push-test>Прислать тестовое</button>`,
+    off: `<p>Пока идёт таймер, каждые 30 минут спрошу: «Как успехи? Продолжаешь?» — даже если Росток закрыт.</p>
+      <button class="btn primary block" data-push-on>${ic('bell', 16)} Включить уведомления</button>`,
+    install: `<p><b>На iPhone уведомления приходят только Ростку, добавленному на экран «Домой».</b></p>
+      <ol class="steps"><li>Открой этот адрес в Safari.</li><li><b>Поделиться → На экран «Домой»</b>. Если есть переключатель «Открывать как веб-приложение» — включи его.</li>
+      <li>Открой Росток с экрана «Домой», войди и нажми здесь «Включить уведомления».</li></ol>`,
+    denied: `<p>Уведомления запрещены. Включи их в настройках: <b>Settings → Notifications → Росток</b>.</p>`,
+    unsupported: `<p>Этот браузер не умеет получать уведомления.</p>`,
+    noserver: `<p>На сервере не установлен модуль уведомлений (<code>npm install</code> в папке server).</p>`,
+  }[ps];
+  return `<h1>Аккаунт</h1>
+  <div class="hero">${mascot('happy', 96)}<div class="bubble"><b>${esc(auth.login)}</b><br>
+    <span class="muted small">${lastSyncOk ? 'Синхронизировано в ' + hm(new Date(lastSyncOk)) : syncing ? 'Синхронизирую…' : 'Ещё не синхронизировалось'}</span>
+    <div class="acts"><button class="btn sm" data-sync-now>${ic('refresh', 14)} Обновить</button></div></div></div>
+  <div class="card small"><p>Заходи под этим логином на телефоне и на компьютере — отметки, занятия и план будут одинаковыми везде. Обновляется само при каждом изменении и раз в минуту.</p></div>
+  <h2>Уведомления</h2>
+  <div class="card small">${pushHtml}</div>
+  <button class="btn ghost block" data-logout style="margin-top:18px">${ic('logout', 16)} Выйти из аккаунта</button>`;
+}
+
 // ---------- экран «Ещё» ----------
 function viewMore() {
   const url = siteUrl();
-  return `<h1>Настройки и помощь</h1>
+  return `<h1>Настройки</h1>
 
   <h2>Как работают напоминания</h2>
   <div class="card small">
-    <p>Сам Росток уведомлений не присылает: сайт на iPhone не умеет делать это без сервера. Поэтому напоминания идут через приложения, которыми ты уже пользуешься:</p>
     <ol class="steps">
+      <li><b>Уведомления Ростка</b> — «как успехи?» каждые 30 минут таймера. Работают, если Росток открыт со своего сервера и уведомления включены в «Аккаунте».</li>
       <li><b>Календарь.</b> У дела есть точное время → на «Плане» нажми «Поставить напоминания в Календарь». Событие появится в Календаре и пришлёт уведомление в начале. Дела, которые уже там, помечены колокольчиком.</li>
       <li><b>Регулярные занятия.</b> «Занятия» → карандаш → «Регулярное напоминание». Например, поиск работы Пн–Пт в 11:00.</li>
       <li><b>Напоминания.</b> Они продолжают работать как обычно. Росток только показывает их в матрице (см. ниже).</li>
@@ -705,8 +1029,8 @@ function viewMore() {
 
   <h2>Таймер</h2>
   <div class="card small">
-    <div class="switch"><span>Спрашивать «как успехи?» каждые 30 минут, пока идёт таймер</span><input type="checkbox" id="timerAlerts" ${state.timerAlerts ? 'checked' : ''}></div>
-    <p class="muted" style="margin-top:8px">При запуске таймера в Календарь добавляется событие на 3 часа с уведомлениями каждые полчаса. Если закончишь раньше — оставшиеся уведомления можно просто смахнуть.</p>
+    <div class="switch"><span>Запасной вариант: если уведомления Ростка выключены, предлагать событие в Календаре</span><input type="checkbox" id="timerAlerts" ${state.timerAlerts ? 'checked' : ''}></div>
+    <p class="muted" style="margin-top:8px">${pushState() === 'on' ? 'Сейчас уведомления Ростка включены — Календарь не нужен.' : 'При запуске таймера iPhone предложит добавить событие с уведомлениями каждые полчаса. Нажми «Добавить», иначе уведомлений не будет. Лучше включить уведомления Ростка в «Аккаунте».'}</p>
   </div>
 
   <h2>Когда открываешь Instagram</h2>
@@ -738,7 +1062,7 @@ function viewMore() {
     <button class="btn block" data-import>Загрузить копию</button>
     <input type="file" id="importFile" accept="application/json,.json" class="hidden">
     <button class="btn danger block" data-reset>Удалить все данные</button>
-    <p class="muted small" style="margin-top:10px">Всё хранится только на этом телефоне. Раз в неделю-две сохраняй копию в Файлы.</p>
+    <p class="muted small" style="margin-top:10px">${auth ? 'Данные сохраняются в твоём аккаунте на сервере и на этом устройстве.' : 'Без аккаунта всё хранится только на этом устройстве. Раз в неделю-две сохраняй копию в Файлы.'}</p>
   </div>
   <p class="muted small center" style="margin-top:20px">Если тяжесть и бессилие держатся неделями — сходи к психологу или врачу. Выгорание лечится.</p>`;
 }
@@ -765,6 +1089,7 @@ function startTimer(aid) {
   closeModal();
   commit('Таймер пошёл. Можно отложить телефон');
   const a = actById(aid);
+  if (pushState() === 'on') { clearTimeout(syncTimer); sync(); return; } // сервер сам пришлёт «как успехи?»
   if (state.timerAlerts && a) {
     // событие в Календаре на 3 часа с уведомлениями каждые 30 минут
     openIcs([icsEvent({
@@ -958,8 +1283,8 @@ function editAct(id) {
 }
 function showWelcome() {
   openModal(`
-    <div class="big-ic">${ic('leaf', 32)}</div>
-    <h2 class="center">Росток</h2>
+    <div class="center">${mascot('happy', 120, 'bob')}</div>
+    <h2 class="center">Привет, я Росток</h2>
     <p><b>План дня</b> — матрица Эйзенхауэра или расписание. Поиск работы и хобби живут в квадрате «Важно, не срочно»: его обычно съедают все остальные.</p>
     <p><b>Каждый день подскажу</b> найти время на поиск работы, прогуляться, вернуться к хобби, которое давно забросила, — и покажу, сколько времени ты уже вложила.</p>
     <p><b>Напоминания</b> приходят из твоего Календаря, а дела из Напоминаний подтягиваются сюда. Как это настроить — во вкладке «Ещё».</p>
@@ -1021,6 +1346,28 @@ document.addEventListener('click', e => {
     save(); render();
     openIcs(pend.map(x => icsEvent({ title: x.text, date: x.date && x.date > today() ? x.date : today(), time: x.time, dur: x.dur })), 'rostok-day.ics');
     return;
+  }
+  if ('menu' in ds) return openDrawer();
+  if (ds.go) { state.tab = ds.go; closeDrawer(); save(); render(); window.scrollTo(0, 0); return; }
+  if (ds.themeSet) { setTheme(ds.themeSet); openDrawer(); render(); return; }
+  if ('themeToggle' in ds) { setTheme(curTheme() === 'dark' ? 'light' : 'dark'); render(); return; }
+  if ('goalEdit' in ds) return editGoal();
+  if (ds.goalSet) { state.dailyGoal = +ds.goalSet; closeModal(); commit('Цель дня: ' + ds.goalSet); return; }
+  if ('register' in ds) {
+    const f = $('#authForm');
+    if (!f.reportValidity()) return;
+    doAuth('register', f.login.value.trim(), f.password.value);
+    return;
+  }
+  if ('syncNow' in ds) { sync().then(() => toast(lastSyncOk ? 'Синхронизировано' : 'Не получилось — проверь интернет')); render(); return; }
+  if ('pushOn' in ds) { enablePush(); return; }
+  if ('pushTest' in ds) { api('push/test', { method: 'POST' }).then(r => toast(r.ok && r.data.sent ? 'Отправила — смотри уведомления' : 'Не получилось отправить')); return; }
+  if ('logout' in ds) {
+    if (!confirm('Выйти из аккаунта на этом устройстве? Данные останутся и здесь, и на сервере.')) return;
+    api('logout', { method: 'POST' }).catch(() => {});
+    auth = null; saveAuth();
+    try { localStorage.removeItem('rostok-push'); } catch (e) { /* ничего */ }
+    render(); return;
   }
   if (ds.day) { histSel = histSel === ds.day ? null : ds.day; render(); return; }
   if (ds.hf !== undefined) { state.histFilter = ds.hf; histSel = null; commit(); window.scrollTo(0, 0); return; }
@@ -1084,10 +1431,15 @@ document.addEventListener('click', e => {
     state.onboarded = true; closeModal(); commit(); return;
   }
   if ('reset' in ds) {
-    if (confirm('Удалить все данные? Это нельзя отменить.')) { state = defaultState(); save(); render(); showWelcome(); }
+    if (confirm(auth ? 'Удалить данные на этом устройстве? В аккаунте они останутся и подтянутся снова.' : 'Удалить все данные? Это нельзя отменить.')) { state = defaultState(); takeSnap(); persist(); render(); showWelcome(); }
   }
 });
 document.addEventListener('submit', e => {
+  if (e.target.id === 'authForm') {
+    e.preventDefault();
+    doAuth('login', e.target.login.value.trim(), e.target.password.value);
+    return;
+  }
   if (e.target.id !== 'winForm') return;
   e.preventDefault();
   const v = $('#winInput').value.trim();
@@ -1109,7 +1461,7 @@ document.addEventListener('change', e => {
       const data = JSON.parse(txt);
       if (!data || !Array.isArray(data.acts)) throw new Error('bad');
       localStorage.setItem(KEY, JSON.stringify(data));
-      state = load(); save(); render(); toast('Данные загружены');
+      state = load(); takeSnap(); persist(); render(); sync(); toast('Данные загружены');
     }).catch(() => toast('Не получилось прочитать файл'));
   }
 });
@@ -1127,12 +1479,23 @@ function handleHash() {
 window.addEventListener('hashchange', () => { if (handleHash()) render(); });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
+  sync();
   if ($('#modal').classList.contains('hidden')) { render(); timerCheckIn(); }
 });
 
 // ---------- старт ----------
+applyTheme();
+takeSnap();
 handleHash();
 render();
+fetch('api/health', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(j => {
+  if (!j || !j.ok) return;
+  server = { ok: true, push: !!j.push };
+  if (auth) sync();
+  if (state.tab === 'account' || state.tab === 'more') softRender();
+}).catch(() => { /* без сервера — работаем локально */ });
+setInterval(() => { if (!document.hidden) sync(); }, 60 * 1000);
+try { matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themePref() === 'auto') { applyTheme(); render(); } }); } catch (e) { /* старый браузер */ }
 const params = new URLSearchParams(location.search);
 if (!state.onboarded) showWelcome();
 else if (params.get('from') === 'insta') showInsta();

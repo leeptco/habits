@@ -1,20 +1,17 @@
 # Как выложить Росток на свой VPS
 
-Росток — это статический сайт: `index.html`, `style.css`, `app.js`, `sw.js`, `manifest.webmanifest` и папка `icons/`. Ни базы данных, ни Node.js, ни Python ему не нужно. Достаточно веб-сервера, который отдаёт эти файлы по **HTTPS**. Без HTTPS iPhone не включит офлайн-режим и копирование адресов.
+Сервер Ростка (папка `server/`) делает три вещи:
+- **раздаёт само приложение**;
+- **хранит аккаунт**: заходишь под одним логином с телефона и компьютера, и отметки везде одинаковые;
+- **присылает уведомления** «Как успехи? Продолжаешь?» каждые 30 минут, пока идёт таймер.
 
-Ниже два варианта:
-- **A.** На сервере ещё нет веб-сервера. Ставим Caddy: он сам получает и продлевает HTTPS-сертификат.
-- **B.** На сервере уже работает nginx, например для webhook телеграм-бота. Добавляем ему ещё один сайт.
+Ему нужны **Node.js 18+**, **HTTPS** (без него iPhone не включит уведомления) и около 50 МБ места. База данных не нужна: всё хранится в JSON-файлах.
 
-Если бот работает через long polling (`bot.polling()`, `run_polling()`), веб-сервера у тебя скорее всего нет. Тогда выбирай вариант A.
+Ниже `1.2.3.4` — IP твоего сервера. Если своего домена нет, используй бесплатный адрес `rostok.1-2-3-4.sslip.io` (точки в IP заменены на дефисы). Он сам указывает на твой сервер.
 
 ---
 
-## 0. Что понадобится
-
-1. **IP-адрес сервера.** Он есть в панели хостинга, ниже обозначен как `1.2.3.4`.
-2. **Адрес сайта.** Подойдёт любой твой домен. Если домена нет, используй бесплатный адрес из IP: `rostok.1-2-3-4.sslip.io`, где точки в IP заменены на дефисы. Такой адрес сам указывает на твой сервер, ничего настраивать не нужно.
-3. Доступ к серверу по SSH, как при установке бота:
+## 1. Подключиться к серверу
 
 ```bash
 ssh root@1.2.3.4
@@ -22,21 +19,31 @@ ssh root@1.2.3.4
 
 Дальше все команды выполняются на сервере.
 
----
-
-## 1. Скачать код на сервер
+## 2. Установить Node.js и git
 
 ```bash
-apt update && apt install -y git
+apt update && apt install -y git nodejs npm
 ```
 
 ```bash
-git clone -b claude/beautiful-knuth-3f3l4u https://github.com/leeptco/habits.git /var/www/rostok
+node --version
 ```
 
-Если ветку уже слили в `main`, клонируй без `-b claude/beautiful-knuth-3f3l4u`.
+Нужна версия 18 или новее. Если меньше, поставь свежую (официальный репозиторий NodeSource):
 
-**Если репозиторий приватный**, git попросит логин и пароль. Удобнее дать серверу ключ только для чтения:
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt install -y nodejs
+```
+
+## 3. Скачать код
+
+```bash
+git clone -b claude/beautiful-knuth-3f3l4u https://github.com/leeptco/habits.git /opt/rostok
+```
+
+Если ветку уже слили в `main`, убери `-b claude/beautiful-knuth-3f3l4u`.
+
+**Если репозиторий приватный**, дай серверу ключ только для чтения:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/rostok -N ""
@@ -46,21 +53,73 @@ ssh-keygen -t ed25519 -f ~/.ssh/rostok -N ""
 cat ~/.ssh/rostok.pub
 ```
 
-Скопируй выведенную строку и добавь её на GitHub: репозиторий → **Settings → Deploy keys → Add deploy key**. Галочку «Allow write access» не ставь. Потом клонируй так:
+Эту строку добавь на GitHub: репозиторий → **Settings → Deploy keys → Add deploy key** (галочку «Allow write access» не ставь). Потом:
 
 ```bash
-GIT_SSH_COMMAND="ssh -i ~/.ssh/rostok" git clone -b claude/beautiful-knuth-3f3l4u git@github.com:leeptco/habits.git /var/www/rostok
+GIT_SSH_COMMAND="ssh -i ~/.ssh/rostok" git clone -b claude/beautiful-knuth-3f3l4u git@github.com:leeptco/habits.git /opt/rostok
 ```
 
 ```bash
-cd /var/www/rostok && git config core.sshCommand "ssh -i ~/.ssh/rostok"
+git -C /opt/rostok config core.sshCommand "ssh -i ~/.ssh/rostok"
 ```
 
----
+## 4. Установить зависимости сервера
 
-## 2A. Веб-сервер Caddy (если веб-сервера ещё нет)
+```bash
+cd /opt/rostok/server && npm install --omit=dev
+```
 
-Установка (официальный репозиторий Caddy для Ubuntu/Debian):
+## 5. Запустить как службу (сам поднимается после перезагрузки)
+
+Отдельный пользователь и папка для данных:
+
+```bash
+useradd --system --create-home --home-dir /var/lib/rostok --shell /usr/sbin/nologin rostok
+```
+
+Файл службы:
+
+```bash
+nano /etc/systemd/system/rostok.service
+```
+
+Вставь (почту в `VAPID_SUBJECT` замени на свою: сервисы уведомлений Apple и Google требуют контакт):
+
+```
+[Unit]
+Description=Rostok
+After=network.target
+
+[Service]
+User=rostok
+WorkingDirectory=/opt/rostok/server
+ExecStart=/usr/bin/env node server.js
+Environment=PORT=8787
+Environment=DATA_DIR=/var/lib/rostok
+Environment=VAPID_SUBJECT=mailto:твоя-почта@example.com
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Сохрани: `Ctrl+O`, `Enter`, `Ctrl+X`. Запусти:
+
+```bash
+systemctl daemon-reload && systemctl enable --now rostok
+```
+
+```bash
+curl -s 127.0.0.1:8787/api/health
+```
+
+Должно ответить `{"ok":true,"push":true}`.
+
+## 6. HTTPS и адрес
+
+### Вариант A — Caddy (если веб-сервера ещё нет)
+
+Если бот работает через long polling, веб-сервера у тебя скорее всего нет. Тогда этот вариант.
 
 ```bash
 apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
@@ -78,34 +137,24 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /
 apt update && apt install -y caddy
 ```
 
-Открой файл настроек:
-
 ```bash
 nano /etc/caddy/Caddyfile
 ```
 
-Удали всё, что там есть, и вставь (адрес замени на свой):
+Удали всё и вставь (адрес замени на свой):
 
 ```
 rostok.1-2-3-4.sslip.io {
-    root * /var/www/rostok
-    file_server
     encode gzip
-    @hidden path /.git* /DEPLOY.md /README.md
-    respond @hidden 404
-    header /sw.js Cache-Control "no-cache"
+    reverse_proxy 127.0.0.1:8787
 }
 ```
-
-Сохрани: `Ctrl+O`, `Enter`, `Ctrl+X`. Перезапусти Caddy:
 
 ```bash
 systemctl reload caddy
 ```
 
-Через минуту открой `https://rostok.1-2-3-4.sslip.io` — должен открыться Росток с замочком в адресной строке.
-
-## 2B. Если уже стоит nginx
+### Вариант B — уже стоит nginx
 
 ```bash
 nano /etc/nginx/sites-available/rostok
@@ -115,10 +164,12 @@ nano /etc/nginx/sites-available/rostok
 server {
     listen 80;
     server_name rostok.1-2-3-4.sslip.io;
-    root /var/www/rostok;
-    index index.html;
-    location ~ /\.git { deny all; }
-    location = /sw.js { add_header Cache-Control "no-cache"; }
+    client_max_body_size 10m;
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
 }
 ```
 
@@ -126,59 +177,64 @@ server {
 ln -s /etc/nginx/sites-available/rostok /etc/nginx/sites-enabled/ && nginx -t && systemctl reload nginx
 ```
 
-HTTPS-сертификат:
-
 ```bash
-apt install -y certbot python3-certbot-nginx
+apt install -y certbot python3-certbot-nginx && certbot --nginx -d rostok.1-2-3-4.sslip.io
 ```
 
-```bash
-certbot --nginx -d rostok.1-2-3-4.sslip.io
-```
-
----
-
-## 3. Открыть порты (если включён файрвол)
+### Порты
 
 ```bash
 ufw allow 80 && ufw allow 443
 ```
 
-Если `ufw` пишет «inactive», ничего делать не нужно. Также проверь в панели хостинга, что порты 80 и 443 не закрыты.
+Если `ufw` пишет «inactive», ничего делать не нужно. Ещё проверь в панели хостинга, что порты 80 и 443 открыты.
+
+Открой `https://rostok.1-2-3-4.sslip.io`: должен появиться Росток.
 
 ---
 
-## 4. Обновлять сайт
+## 7. На iPhone
 
-После каждого нового изменения в репозитории:
+1. Открой адрес в **Safari** → **Поделиться → На экран «Домой»**. Если есть переключатель **«Открывать как веб-приложение»**, включи его.
+2. Открой Росток **с экрана «Домой»** → меню ☰ → **Аккаунт** → **Создать аккаунт**.
+3. Там же нажми **«Включить уведомления»** и разреши их. Потом **«Прислать тестовое»**: уведомление должно прийти за пару секунд.
+4. На компьютере и других устройствах просто войди под тем же логином.
+
+**Перенос старых данных с GitHub Pages:**
+1. На старом адресе: **Настройки → Сохранить копию данных**.
+2. На новом: **Настройки → Загрузить копию**. Если ты уже вошла в аккаунт, данные сразу уйдут на сервер.
+
+**Команды iPhone.** Замени адрес на новый:
+- в команде «Росток» (действие **URL**): `https://новый-адрес/#sync=`;
+- в автоматизации Instagram: `https://новый-адрес/?from=insta`.
+
+Эти команды открывают Safari, а у Safari и у иконки на экране «Домой» отдельные хранилища. Поэтому **один раз войди в аккаунт и в Safari**. После этого напоминания, пришедшие через Safari, сами доедут до приложения через сервер.
+
+**Закрыть регистрацию.** Когда твой аккаунт создан, запрети регистрацию посторонним. В файл службы добавь строку `Environment=ALLOW_SIGNUP=0` и перезапусти:
 
 ```bash
-cd /var/www/rostok && git pull
+systemctl daemon-reload && systemctl restart rostok
 ```
 
-Перезапускать Caddy или nginx не нужно. Чтобы обновлялось само каждые 10 минут:
+---
+
+## 8. Обновления
 
 ```bash
-(crontab -l 2>/dev/null; echo "*/10 * * * * cd /var/www/rostok && git pull -q") | crontab -
+cd /opt/rostok && git pull && cd server && npm install --omit=dev && systemctl restart rostok
 ```
 
----
+## 9. Резервная копия
 
-## 5. Перенести данные и команды на новый адрес
+Все аккаунты и данные лежат в `/var/lib/rostok`. Копия на свой компьютер (команду выполняй **на компьютере**):
 
-Данные Ростка хранятся в телефоне отдельно для каждого адреса сайта. На новом адресе Росток откроется пустым, поэтому:
+```bash
+scp -r root@1.2.3.4:/var/lib/rostok ./rostok-backup
+```
 
-1. На **старом** адресе (GitHub Pages): **Ещё → Сохранить копию данных**. Файл сохранится в «Файлы».
-2. На **новом** адресе: **Ещё → Загрузить копию** и выбери этот файл.
-3. В «Командах» замени старый адрес на новый:
-   - в команде **«Росток»**, в действии **URL** (`https://новый-адрес/#sync=`);
-   - в автоматизации для **Instagram** (`https://новый-адрес/?from=insta`).
-4. Ярлык Ростка на экране «Домой» добавь заново с нового адреса.
+## Если что-то не работает
 
----
-
-## Если не открывается
-
-- `systemctl status caddy` или `systemctl status nginx` — работает ли веб-сервер.
-- `journalctl -u caddy -n 50` — ошибки Caddy, например «не удалось получить сертификат». Чаще всего это значит, что закрыт порт 80 или адрес не совпадает с IP сервера.
-- `ls /var/www/rostok` — на месте ли файлы, есть ли `index.html`.
+- `systemctl status rostok` — запущен ли сервер Ростка.
+- `journalctl -u rostok -n 50` — его ошибки.
+- `journalctl -u caddy -n 50` — ошибки HTTPS. Чаще всего это закрытый порт 80 или адрес, который не совпадает с IP сервера.
+- **Уведомления не приходят.** Росток должен быть открыт с экрана «Домой», а не в Safari. Проверь: Settings → Notifications → Росток. В Ростке нажми «Прислать тестовое».
